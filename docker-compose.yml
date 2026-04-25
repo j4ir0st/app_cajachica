@@ -1,0 +1,17 @@
+# Docker Compose para el Sistema de Caja Chica Surgicorp
+# Acceso local: http://localhost:8006/app_cajachica/
+
+services:
+  app-cajachica:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    volumes:
+      - .:/app
+      - /app/node_modules # Evita sobrescribir node_modules del contenedor
+    ports:
+      - "8006:5173"
+    restart: unless-stopped
+    environment:
+      - TZ=America/Lima
+    container_name: surgicorp-cajachica

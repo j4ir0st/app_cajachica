@@ -1,0 +1,37 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-brand-light text-brand-dark antialiased font-outfit;
+  }
+}
+
+@layer components {
+  /* Estilo Glassmorphism Premium */
+  .glass-card {
+    @apply bg-white/80 backdrop-blur-xl border border-white/20 shadow-2xl;
+  }
+
+  /* Animación suave estándar */
+  .transition-premium {
+    @apply transition-all duration-300 ease-in-out;
+  }
+
+  /* Botón con estilo premium */
+  .btn-premium {
+    @apply px-6 py-3 rounded-xl font-bold transition-premium active:scale-95 disabled:opacity-70 shadow-lg;
+  }
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  @apply bg-transparent;
+}
+::-webkit-scrollbar-thumb {
+  @apply bg-brand-primary/20 rounded-full hover:bg-brand-primary/40 transition-premium;
+}
