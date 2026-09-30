@@ -54,7 +54,7 @@ const Step3Resumen = ({ cabecera, detalles, enviando, errorEnvio }) => {
         <FilaResumen
           icono={DollarSign}
           etiqueta="Monto Solicitado"
-          valor={`S/ ${montoFinal.toFixed(2)}`}
+          valor={`S/. ${montoFinal.toFixed(2)}`}
           color="text-brand-primary"
         />
         {cabecera.obs && (
@@ -85,15 +85,16 @@ const Step3Resumen = ({ cabecera, detalles, enviando, errorEnvio }) => {
                   <p className="text-xs text-gray-400">{det.fecha_gasto} {det.nro_factura ? `• ${det.nro_factura}` : ''}</p>
                 </div>
               </div>
-              <span className="text-sm font-black text-brand-dark">S/ {parseFloat(det.costo || 0).toFixed(2)}</span>
+              <span className="text-sm font-black text-brand-dark">S/. {parseFloat(det.costo || 0).toFixed(2)}</span>
             </div>
           ))}
         </div>
         {/* Totales */}
         <div className="px-5 py-4 bg-brand-light border-t-2 border-brand-primary/10 flex items-center justify-between">
           <span className="text-sm font-black text-brand-dark uppercase tracking-wider">Total Gastos</span>
-          <span className="text-lg font-black text-brand-primary">S/ {totalGastos.toFixed(2)}</span>
+          <span className="text-lg font-black text-brand-primary">S/. {totalGastos.toFixed(2)}</span>
         </div>
+
       </div>
 
       {/* Aviso de imágenes adjuntas */}

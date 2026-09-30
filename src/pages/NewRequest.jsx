@@ -54,7 +54,7 @@ const NewRequest = () => {
     ? parseFloat(cabecera.monto_solicitado)
     : totalGastos;
 
-  // Validaciones por paso — como variable derivada para que React re-evalúe con cada cambio de estado
+  // Validaciones por paso — garantiza que los campos requeridos estén completos antes de avanzar
   const pasoValido = pasoActual === 1
     ? !!cabecera.usuario_id && !!cabecera.area_id && !!cabecera.fecha_solicitud
     : pasoActual === 2
@@ -115,6 +115,9 @@ const NewRequest = () => {
           fd.append('tipogasto_id', det.tipogasto_url || '');
           fd.append('subgasto_id', det.subgasto_url || '');
           fd.append('lima_provincia', det.lima_provincia || 'L');
+          if (det.lima_provincia === 'P' && det.provincia_url) {
+            fd.append('provincia_id', det.provincia_url);
+          }
           fd.append('nro_factura', det.nro_factura || '');
           fd.append('nro_ruc', det.nro_ruc || '');
           fd.append('origen', det.origen_url || '');
@@ -135,6 +138,7 @@ const NewRequest = () => {
             tipogasto_id: det.tipogasto_url || null,
             subgasto_id: det.subgasto_url || null,
             lima_provincia: det.lima_provincia || 'L',
+            provincia_id: det.lima_provincia === 'P' ? (det.provincia_url || null) : null,
             nro_factura: det.nro_factura || '',
             nro_ruc: det.nro_ruc || '',
             origen: det.origen_url || null,
@@ -163,8 +167,8 @@ const NewRequest = () => {
   };
 
   return (
-    <div className="h-[calc(100vh-6rem)] flex flex-col pt-4 pb-4 pl-0 pr-0 animate-fade-in font-outfit overflow-hidden">
-      <div className="w-full max-w-4xl mx-auto flex flex-col h-full">
+    <div className="h-[calc(100vh-6rem)] flex flex-col pt-4 pb-4 px-4 md:px-8 animate-fade-in font-outfit overflow-hidden">
+      <div className="w-full flex flex-col h-full">
         {/* Encabezado de la página */}
         <div className="flex items-center justify-between mb-2 shrink-0">
           <div>

@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { LogOut, ChevronDown, Bell, User, Search, PlusCircle, RefreshCw } from 'lucide-react';
 import { useUserStore } from '../store/userStore';
+import { useCatalogoStore } from '../store/catalogoStore';
 import { limpiarCatalogos } from '../utils/catalogoCache';
 
 /**
@@ -11,6 +12,7 @@ const Header = () => {
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [cacheLimpiado, setCacheLimpiado] = useState(false);
   const { user, logout } = useUserStore();
+  const { cargarCatalogos } = useCatalogoStore();
   const navigate = useNavigate();
 
   const handleLogout = () => {
@@ -18,9 +20,10 @@ const Header = () => {
     navigate('/login');
   };
 
-  // Limpia todos los catálogos guardados en memoria y muestra confirmación breve
+  // Limpia todos los catálogos guardados en memoria y fuerza la recarga desde la API
   const handleLimpiarCache = () => {
     limpiarCatalogos();
+    cargarCatalogos(true); // Forzar recarga inmediata
     setCacheLimpiado(true);
     setTimeout(() => setCacheLimpiado(false), 2000);
   };

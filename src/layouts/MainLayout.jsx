@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Outlet, useNavigate } from 'react-router-dom';
 import Header from '../components/Header';
 import Sidebar from '../components/Sidebar';
 import { useUserStore } from '../store/userStore';
+import { useCatalogoStore } from '../store/catalogoStore';
 
 /**
  * Layout principal que envuelve toda la aplicación después del Login
@@ -11,7 +12,13 @@ import { useUserStore } from '../store/userStore';
 const MainLayout = () => {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const { user } = useUserStore();
+  const { cargarCatalogos } = useCatalogoStore();
   const navigate = useNavigate();
+
+  // Carga de catálogos al inicio de la aplicación
+  useEffect(() => {
+    cargarCatalogos();
+  }, [cargarCatalogos]);
 
   // Función para colapsar/expandir el sidebar
   const toggleSidebar = () => setIsSidebarOpen(!isSidebarOpen);
@@ -30,9 +37,9 @@ const MainLayout = () => {
           isSidebarOpen={isSidebarOpen}
         />
 
-        {/* Contenido dinámico (vistas) */}
-        <main className="flex-1 relative overflow-y-auto focus:outline-none p-0 md:p-0 lg:p-0">
-          <div className="max-w-7xl mx-auto">
+        {/* Área de contenido dinámico (vistas) */}
+        <main className="flex-1 relative overflow-y-auto focus:outline-none p-0">
+          <div className="w-full">
             <Outlet />
           </div>
         </main>
@@ -42,3 +49,4 @@ const MainLayout = () => {
 };
 
 export default MainLayout;
+

@@ -22,43 +22,29 @@ const Login = () => {
     setLoginError('');
 
     try {
-      // 1. Obtener Token JWT de DRF
+      // 1. Obtener Token JWT y Datos de Usuario en una sola consulta
       const tokenRes = await axios.post(`${apiUrl}api/token/`, {
         username: formData.usuario,
         password: formData.password
       });
 
-      const { access, refresh } = tokenRes.data;
-
-      // 2. Extraer ID de usuario desde el Token JWT (más robusto que filtrar por nombre)
-      const payload = JSON.parse(atob(access.split('.')[1]));
-      const userId = payload.user_id;
-
-      const userRes = await axios.get(`${apiUrl}users/${userId}/`, {
-        params: { format: 'json' },
-        headers: { Authorization: `Bearer ${access}` }
-      });
-
-      console.log('Datos de perfil recibidos:', userRes.data);
-      const rawUser = userRes.data;
+      const { access, refresh, user: rawUser } = tokenRes.data;
 
       if (!rawUser) {
-        throw new Error(`No se pudo cargar el perfil del usuario con ID: ${userId}`);
+        throw new Error('No se pudo obtener la información del perfil del usuario.');
       }
 
-      // 3. Estructurar datos para el store
-      // Se guardan tanto los IDs como las URLs (formato hyperlinked para DRF)
+      // 2. Estructuramos los datos para el store
+      // Mapeamos los datos para que coincidan con lo que espera el resto de la app
       const userData = {
         id: rawUser.id,
-        url: rawUser.url,                                     // URL hyperlinked del usuario
         username: rawUser.username,
-        nombre: `${rawUser.first_name} ${rawUser.last_name}`,
+        nombre: rawUser.full_name || `${rawUser.first_name} ${rawUser.last_name}`,
         email: rawUser.email,
-        puesto: rawUser.puesto_id?.nombre || 'Sin Puesto',
-        puesto_id: rawUser.puesto_id?.id || null,
-        area: rawUser.area_id?.nombre || 'Sin Área',
-        area_id: rawUser.area_id?.id || null,
-        area_url: rawUser.area_id?.url || null,              // URL hyperlinked del área
+        puesto: rawUser.puesto || 'Sin Puesto',
+        area: rawUser.area || 'Sin Área',
+        area_id: rawUser.area_id || 'Sin Área',
+        empresa: rawUser.empr_id || 'Sin Empresa',
         avatar: rawUser.avatar || null,
         is_staff: rawUser.is_staff
       };
@@ -76,6 +62,7 @@ const Login = () => {
     } finally {
       setIsLoading(false);
     }
+
   };
 
   const currentYear = new Date().getFullYear();

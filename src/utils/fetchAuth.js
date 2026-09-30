@@ -1,27 +1,14 @@
-/**
- * fetchAuth.js
- * Wrapper centralizado sobre fetch para peticiones autenticadas.
- *
- * Flujo al recibir un 401:
- *   1. Intenta renovar el access token usando el refresh token del store.
- *   2. Si la renovación es exitosa, reintenta la petición original con el nuevo token.
- *   3. Si falla (refresh inválido o expirado), muestra un overlay de aviso
- *      y redirige al login después de 3 segundos.
- */
-
 import { useUserStore } from '../store/userStore';
 
-const API_URL = import.meta.env.DEV ? '' : import.meta.env.VITE_API_URL;
+const API_URL = import.meta.env.DEV ? '' : (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
 
 // Bandera para evitar múltiples intentos de refresh simultáneos
 let refrescando = false;
 
 /**
  * Muestra un overlay que avisa al usuario que se redirigirá al login.
- * Se destruye solo cuando la página hace el redirect.
  */
 const mostrarAvisoExpiracion = () => {
-  // Evitar duplicados si ya existe el overlay
   if (document.getElementById('cc-token-overlay')) return;
 
   const overlay = document.createElement('div');
@@ -32,7 +19,6 @@ const mostrarAvisoExpiracion = () => {
     backdrop-filter: blur(8px);
     display: flex; align-items: center; justify-content: center;
     font-family: 'Outfit', sans-serif;
-    animation: fadeIn 0.3s ease;
   `;
   overlay.innerHTML = `
     <div style="
@@ -51,19 +37,12 @@ const mostrarAvisoExpiracion = () => {
       <p style="color: #64748b; font-size: 14px; margin: 0 0 20px; line-height: 1.5;">
         Tu sesión ha expirado. Por seguridad, serás redirigido al inicio de sesión en unos segundos.
       </p>
-      <div style="
-        height: 4px; background: #f1f5f9; border-radius: 99px; overflow: hidden;
-      ">
-        <div id="cc-progress" style="
-          height: 100%; width: 100%; background: #0ea5e9;
-          border-radius: 99px;
-          transition: width 3s linear;
-        "></div>
+      <div style="height: 4px; background: #f1f5f9; border-radius: 99px; overflow: hidden;">
+        <div id="cc-progress" style="height: 100%; width: 100%; background: #0ea5e9; border-radius: 99px; transition: width 3s linear;"></div>
       </div>
     </div>
   `;
   document.body.appendChild(overlay);
-  // Iniciar la barra de progreso en el siguiente frame para que la transición sea visible
   requestAnimationFrame(() => {
     const barra = document.getElementById('cc-progress');
     if (barra) barra.style.width = '0%';
@@ -71,11 +50,10 @@ const mostrarAvisoExpiracion = () => {
 };
 
 /**
- * Intenta renovar el access token usando el refresh token almacenado.
- * @returns {Promise<string|null>} El nuevo access token, o null si falla.
+ * Intenta renovar el access token usando el refresh token.
  */
 const renovarToken = async () => {
-  const { refreshToken, setToken, logout } = useUserStore.getState();
+  const { refreshToken, setToken } = useUserStore.getState();
   if (!refreshToken) return null;
 
   try {
@@ -91,15 +69,12 @@ const renovarToken = async () => {
     const nuevoToken = datos.access;
     setToken(nuevoToken);
     return nuevoToken;
-  } catch {
+  } catch (error) {
+    console.error('[fetchAuth] Error crítico al renovar token:', error);
     return null;
   }
 };
 
-/**
- * Maneja la expiración de sesión irrecuperable:
- * muestra aviso y redirige al login tras 3 segundos.
- */
 const manejarSesionExpirada = () => {
   const { logout } = useUserStore.getState();
   logout();
@@ -110,48 +85,53 @@ const manejarSesionExpirada = () => {
 };
 
 /**
- * Realiza un fetch autenticado con el token JWT del store.
- * En caso de 401, intenta refrescar el token una sola vez.
- * @param {string} url - URL del endpoint.
- * @param {RequestInit} opciones - Opciones de fetch (method, body, etc.).
- * @returns {Promise<Response>}
+ * Realiza un fetch autenticado con el token JWT.
+ * Normaliza la URL para evitar dobles slashes.
  */
 export const fetchAuth = async (url, opciones = {}) => {
   const { token } = useUserStore.getState();
+  
+  // Normalizar URL: quitar slashes duplicados (excepto después de http://)
+  const urlFinal = url.replace(/([^:]\/)\/+/g, "$1");
 
-  const construirCabeceras = (tkn) => ({
-    ...opciones.headers,
-    Authorization: `Bearer ${tkn}`,
-  });
+  const construirCabeceras = (tkn) => {
+    const headers = { ...opciones.headers };
+    if (tkn) {
+      headers['Authorization'] = `Bearer ${tkn}`;
+    }
+    return headers;
+  };
 
-  // Primera petición con el token actual
-  const respuesta = await fetch(url, {
-    ...opciones,
-    headers: construirCabeceras(token),
-  });
+  try {
+    const respuesta = await fetch(urlFinal, {
+      ...opciones,
+      headers: construirCabeceras(token),
+    });
 
-  // Si no es 401 o ya estamos en medio de un refresh, devolver directamente
-  if (respuesta.status !== 401) return respuesta;
-  if (refrescando) {
-    manejarSesionExpirada();
-    // Devolvemos la respuesta 401 original para que el caller la maneje
-    return respuesta;
+    if (respuesta.status !== 401) return respuesta;
+
+    if (refrescando) {
+      manejarSesionExpirada();
+      return respuesta;
+    }
+
+    refrescando = true;
+    const nuevoToken = await renovarToken();
+    refrescando = false;
+
+    if (!nuevoToken) {
+      manejarSesionExpirada();
+      return respuesta;
+    }
+
+    // Reintentar con el nuevo token
+    return fetch(urlFinal, {
+      ...opciones,
+      headers: construirCabeceras(nuevoToken),
+    });
+  } catch (error) {
+    console.error(`[fetchAuth] Error de red en ${urlFinal}:`, error);
+    throw error;
   }
-
-  // Intentar renovar el token (solo un intento simultáneo)
-  refrescando = true;
-  const nuevoToken = await renovarToken();
-  refrescando = false;
-
-  if (!nuevoToken) {
-    // El refresh falló: sesión irrecuperable
-    manejarSesionExpirada();
-    return respuesta;
-  }
-
-  // Reintentar la petición original con el nuevo token
-  return fetch(url, {
-    ...opciones,
-    headers: construirCabeceras(nuevoToken),
-  });
 };
+

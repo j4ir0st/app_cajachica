@@ -42,16 +42,16 @@ const Step1Cabecera = ({ datos, onChange }) => {
     if (!user || datos.usuario_id) return;
 
     const inicializarConUrl = async () => {
-      let usuarioUrl = user.url     || null;
-      let areaUrl    = user.area_url || null;
+      let usuarioUrl = user.url || null;
+      let areaUrl = user.area_url || null;
 
       // Recuperar URLs si no están en el store (sesión iniciada antes del cambio)
       if (!usuarioUrl || !areaUrl) {
         try {
-          const res  = await fetchAuth(`${API_URL}/users/${user.id}/?format=json`);
+          const res = await fetchAuth(`${API_URL}/users/${user.id}/?format=json`);
           const data = await res.json();
-          usuarioUrl = data.url            || null;
-          areaUrl    = data.area_id?.url   || null;
+          usuarioUrl = data.url || null;
+          areaUrl = data.area_id?.url || null;
           // Persistir en el store para no repetir el fetch la próxima vez
           updateUser({ url: usuarioUrl, area_url: areaUrl });
         } catch {
@@ -60,11 +60,11 @@ const Step1Cabecera = ({ datos, onChange }) => {
       }
 
       onChange({
-        usuario_id:     user.id,
-        usuario_url:    usuarioUrl,
-        area_id:        user.area_id,
-        area_url:       areaUrl,
-        area_nombre:    user.area,
+        usuario_id: user.id,
+        usuario_url: usuarioUrl,
+        area_id: user.area_id,
+        area_url: areaUrl,
+        area_nombre: user.area,
         usuario_nombre: user.nombre,
         fecha_solicitud: ahora,
       });
@@ -105,8 +105,8 @@ const Step1Cabecera = ({ datos, onChange }) => {
     const seleccionado = usuariosArea.find((u) => String(u.id) === String(usuarioId));
     if (seleccionado) {
       onChange({
-        usuario_id:   seleccionado.id,
-        usuario_url:  seleccionado.url,   // URL hyperlinked para el POST
+        usuario_id: seleccionado.id,
+        usuario_url: seleccionado.url,   // URL hyperlinked para el POST
         usuario_nombre: seleccionado.nombre,
       });
     }
@@ -119,13 +119,21 @@ const Step1Cabecera = ({ datos, onChange }) => {
         <p className="text-sm text-gray-400 mt-0.5">Complete los datos generales de la solicitud de caja chica.</p>
       </div>
 
+      {/* Alerta si falta el área del usuario */}
+      {(!user?.area_id || user.area_id === 'Sin Área') && (
+        <div className="flex items-center gap-3 bg-red-50 border border-red-200 text-red-600 text-sm font-bold rounded-2xl px-4 py-3 animate-shake">
+          <Info size={18} />
+          <span>Error: Tu usuario no tiene un área asignada. No podrás continuar con la solicitud.</span>
+        </div>
+      )}
+
       {/* Área (siempre solo lectura) y Solicitante */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div>
           <label className="block text-xs font-black text-brand-dark uppercase tracking-widest mb-2">Área</label>
           <div className="bg-brand-light border border-gray-100 rounded-2xl px-4 py-3 text-sm font-semibold text-gray-500 flex items-center gap-2">
             <Info size={15} className="text-brand-primary shrink-0" />
-            {user?.area || '—'}
+            {user?.area_id || '—'}
           </div>
         </div>
 
@@ -165,7 +173,7 @@ const Step1Cabecera = ({ datos, onChange }) => {
             <span className="ml-1 text-gray-400 font-medium normal-case tracking-normal">(opcional)</span>
           </label>
           <div className="relative">
-            <DollarSign size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-brand-primary" />
+            <span className="absolute left-4 top-1/2 -translate-y-1/2 text-[10px] font-black text-brand-primary">S/.</span>
             <input
               type="number"
               min="0"
@@ -173,7 +181,7 @@ const Step1Cabecera = ({ datos, onChange }) => {
               placeholder="0.00 — se calcula del detalle"
               value={datos.monto_solicitado || ''}
               onChange={(e) => manejarCambio('monto_solicitado', e.target.value)}
-              className="w-full bg-white border-2 border-gray-100 focus:border-brand-primary rounded-2xl pl-10 pr-4 py-3 text-sm font-semibold text-brand-dark outline-none transition-colors"
+              className="w-full bg-white border-2 border-gray-100 focus:border-brand-primary rounded-2xl pl-12 pr-4 py-3 text-sm font-semibold text-brand-dark outline-none transition-colors"
             />
           </div>
         </div>

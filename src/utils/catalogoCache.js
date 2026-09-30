@@ -12,6 +12,7 @@ export const CLAVES_CATALOGO = {
   tiposGasto: 'cc_cache_tipogasto',
   subgastos:  'cc_cache_subgasto',
   entidades:  'cc_cache_entidades',
+  provincias: 'cc_cache_provincias',
 };
 
 /**
