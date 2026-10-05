@@ -18,12 +18,8 @@ export default defineConfig(({ mode }) => {
       watch: {
         usePolling: true,
       },
-      // HMR explícito: evita que el WebSocket de hot-reload apunte al puerto del proxy en lugar del de Vite
-      hmr: {
-        host: 'localhost',
-        port: 5173,
-        protocol: 'ws',
-      },
+      // HMR dinámico: resuelve automáticamente host y puerto según la conexión del navegador
+      hmr: true,
       // Configuración de Proxy Dinámico vía .env para evitar CORS en desarrollo
       proxy: {
         '/api': {

@@ -18,31 +18,56 @@ Este documento describe la especificación técnica completa, flujo de estados, 
 
 ---
 
-## 📊 2. Estados del Requerimiento (`estado_requerimiento`)
+## 📊 2. Estados del Requerimiento (`estado_requerimiento`), Transiciones y Permisos
 
 Los requerimientos manejan un ciclo de vida de 4 estados (`models.TextChoices`). En las respuestas del backend se entrega el objeto estructurado `{ CLAVE: "Texto" }`:
 
-| Código (`clave`) | Etiqueta (`display`) | Descripción | Color UI Sugerido |
+| Código (`clave`) | Etiqueta (`display`) | Permisos y Reglas de Transición | Color UI Sugerido |
 | :--- | :--- | :--- | :--- |
-| **`PD`** | **Pendiente** | Solicitud creada, abierta para registrar comprobantes de gasto. | 🟠 Ámbar / Warning (`#d97706`) |
-| **`LQ`** | **Liquidado** | El usuario finalizó el registro de gastos y envió la rendición. | 🔵 Azul / Info (`#2563eb`) |
-| **`CD`** | **Cerrado** | Aprobado y cerrado formalmente por Administración/Tesorería. | 🟢 Verde / Success (`#16a34a`) |
-| **`RC`** | **Rechazado** | Observado o rechazado por jefatura/gerencia. | 🔴 Rojo / Danger (`#dc2626`) |
+| **`PD`** | **Pendiente (Borrador)** | **Estado inicial.** Permite crear, modificar y guardar gastos con datos parciales. **El usuario solicitante puede cambiar de `PD` a `LQ`**. | 🟠 Ámbar / Warning (`#d97706`) |
+| **`LQ`** | **Liquidado (Enviado)** | El usuario envía su rendición final. **No se puede revertir a `PD`**. Bloquea la edición de detalles. Exige comprobantes y validaciones completas. | 🔵 Azul / Info (`#2563eb`) |
+| **`CD`** | **Cerrado** | **Solo Gerente de Operaciones** (puesto *Gerente* y área *Operaciones*) puede pasar de `LQ` a `CD`. Estado final inmutable. | 🟢 Verde / Success (`#16a34a`) |
+| **`RC`** | **Rechazado** | **Solo Gerente de Operaciones** (puesto *Gerente* y área *Operaciones*) puede pasar de `LQ` a `RC`. Estado final inmutable. | 🔴 Rojo / Danger (`#dc2626`) |
+
+> [!CAUTION]
+> **Matriz de Seguridad de Estados:**
+> 1. **`PD` ➔ `LQ`**: Permitido para el usuario solicitante/creador.
+> 2. **`LQ` ➔ `CD` / `RC`**: Exclusivo para usuarios con **Puesto: Gerente** y **Área: Operaciones** (o Superuser).
+> 3. **`LQ` / `CD` / `RC` ➔ `PD`**: **Estrictamente Prohibido.** No se puede revertir una solicitud a borrador.
+> 4. **Edición de Detalles**: Solo permitida mientras el requerimiento esté en estado **`PD`**.
 
 ---
 
 ## ⚙️ 3. Reglas de Negocio Reactivas en Formulario (`RC_SubGasto`)
 
-El modelo `RC_SubGasto` contiene banderas booleanas que le indican a React **qué campos renderizar y validar obligatoriamente** cuando el usuario selecciona un subgasto:
+El modelo `RC_SubGasto` contiene banderas booleanas que le indican al Frontend **qué campos renderizar, exigir y validar dinámicamente** cuando el usuario selecciona un subgasto:
 
-| Campo en `RC_SubGasto` | Tipo | Comportamiento en la UI de React |
+> [!IMPORTANT]
+> - **Guardado Borrador (`PD`):** Mientras la solicitud esté en estado `PD`, el usuario puede guardar avances con datos parciales.
+> - **Envío / Liquidación (`LQ`):** Al enviar la rendición o pasar a `LQ`, el backend exige obligatoriamente que cada gasto tenga su comprobante (`adj_cajachica`) y cumpla con todas las reglas dinámicas del subgasto (RUC, factura, placa, origen/destino, provincia, detalle).
+> - **Visibilidad Completa para Jefaturas y Gestión:** Para roles de supervisión (*Jefe, Gerente, Coordinador y Planner*), **todas las opciones del catálogo son siempre visibles**. La bandera `visible_para_operativo` únicamente restringe opciones para personal operativo (*Choferes, Auxiliares, Motorizados*).
+
+| Campo en `RC_SubGasto` | Tipo | Comportamiento en la UI (React / Angular) |
 | :--- | :--- | :--- |
-| `localidad_permitida` | `'L' \| 'P' \| 'A'` | - `'L'`: Fijar automáticamente en **Solo Lima**.<br>- `'P'`: Fijar automáticamente en **Solo Provincia**.<br>- `'A'`: Habilitar Radio/Select para elegir Lima o Provincia. |
-| `requiere_origen_destino` | `boolean` | Si es `true`, mostrar como obligatorios los desplegables de **Institución Origen** y **Destino** (`RC_Entidades`). |
-| `requiere_comprobante` | `boolean` | Si es `true`, mostrar y exigir los inputs de **N° RUC** y **N° Factura/Boleta**. |
-| `requiere_adjunto` | `boolean` | Si es `true` (default), exigir la subida de foto/comprobante (`adj_cajachica`). |
+| `localidad_permitida` | `'L' \| 'P' \| 'A'` | - `'L'`: Fijar automáticamente en **Solo Lima**.<br>- `'P'`: Fijar automáticamente en **Solo Provincia**.<br>- `'A'`: Habilitar Selector para elegir Lima o Provincia. |
+| `requiere_origen_destino` | `boolean` | Si es `true`, exigir la dupla de desplegables **Origen** (`origen`) y **Destino** (`destino`) desde `RC_Entidades` (usado típicamente para *Taxis*). |
+| `requiere_entidad` | `boolean` | Si es `true`, exigir seleccionar una **Entidad/Sede única** (`RC_Entidades`) y **enviarla en el campo `origen`** del payload (ej: *Estacionamiento*, *Impresiones*). |
+| `requiere_placa` | `boolean` | Si es `true`, mostrar y exigir el input de texto de la **Placa** del vehículo (`placa`) (ej: *Combustible, Peajes, Mantenimiento*). |
+| `requiere_provincia` | `boolean` | Si es `true` (o cuando la localidad seleccionada sea `'P'`), exigir el selector de **Provincia** (`provincia_id`). |
+| `visible_para_operativo` | `boolean` | Indica si el subgasto está autorizado para personal operativo (*Choferes, Auxiliares, Motorizados*). Si el usuario no es operativo (es Jefatura, Gerente, Coordinador o Planner), tiene acceso a **todas** las opciones. |
+| `requiere_comprobante` | `boolean` | Si es `true`, exigir los inputs de **N° RUC** (`nro_ruc`) y **N° Factura/Boleta** (`nro_factura`). |
 | `requiere_detalle` | `boolean` | Si es `true`, exigir el campo de texto libre `detalle`. |
-| `mensaje_detalle` | `string \| null` | Texto dinámico que debe colocarse como placeholder o ayuda del campo `detalle` (Ej: *"Indicar nombre de paciente o placa"*). |
+| `mensaje_detalle` | `string \| null` | Texto dinámico que debe colocarse como placeholder o ayuda del campo `detalle` (Ej: *"TE SOLICITE INDICAR EL NOMBRE DE ACC"*). |
+
+### 🚀 Recomendación de Rendimiento para Filtrado por Roles:
+> [!TIP]
+> **Estrategia Frontend Más Eficiente:** El frontend consulta el catálogo completo de `/RC_SubGasto/` una sola vez y lo guarda en caché (React Query / SWR / Pinia / Redux). Según el perfil del usuario autenticado (`esOperativo`), filtra en memoria instantáneamente sin peticiones HTTP adicionales:
+> ```typescript
+> const subgastosVisibles = useMemo(() => {
+>   return isOperativo ? allSubgastos.filter(s => s.visible_para_operativo) : allSubgastos;
+> }, [allSubgastos, isOperativo]);
+> ```
+> Opcionalmente, la API también soporta filtrado por backend mediante: `GET /RC_SubGasto/?perfil=operativo` (para operativos) o `GET /RC_SubGasto/` (catálogo completo para jefaturas).
 
 ---
 
@@ -62,15 +87,15 @@ El modelo `RC_SubGasto` contiene banderas booleanas que le indican a React **qu�
 | Operación | Método | URL | Content-Type & Payload |
 | :--- | :--- | :--- | :--- |
 | **Listar** | `GET` | `/RC_Detalle/?requerimiento_id=<ID>` | `application/json` |
-| **Crear Gasto** | `POST` | `/RC_Detalle/` | `multipart/form-data` (`requerimiento_id`, `subgasto_id`, `costo`, `lima_provincia`, `adj_cajachica`, `origen`, `destino`, `nro_factura`, `nro_ruc`, `detalle`) |
+| **Crear Gasto** | `POST` | `/RC_Detalle/` | `multipart/form-data` (`requerimiento_id`, `subgasto_id`, `costo`, `lima_provincia`, `provincia_id`, `placa`, `origen`, `destino`, `nro_factura`, `nro_ruc`, `detalle`, `adj_cajachica`) |
 | **Eliminar Gasto** | `DELETE` | `/RC_Detalle/<ID>/` | — |
 
 ### C. Catálogos Maestros
 
 | Endpoint | Método | Propósito | Parámetros Útiles |
 | :--- | :--- | :--- | :--- |
-| `/RC_SubGasto/` | `GET` | Catálogo de subgastos y reglas del formulario | Retorna banderas reactivas |
-| `/RC_Entidades/` | `GET` | Sedes/Hospitales (Origen y Destino) | `?search=REBAGLIATI` |
+| `/RC_SubGasto/` | `GET` | Catálogo de subgastos y reglas reactivas | `?perfil=operativo` (opcional para filtrar operativos) |
+| `/RC_Entidades/` | `GET` | Sedes/Hospitales (Origen, Destino y Entidad única) | `?search=REBAGLIATI` |
 | `/RC_TipoGasto/` | `GET` | Grupos generales de gasto | `?is_aux=true` |
 | `/RC_Provincia/` | `GET` | Catálogo de provincias | `?top=100` |
 
@@ -93,8 +118,11 @@ export interface SubGastoItem {
   tipogasto_id?: { id: number; nombre: string; is_aux: boolean };
   localidad_permitida: 'L' | 'P' | 'A';
   requiere_origen_destino: boolean;
+  requiere_entidad: boolean;
+  requiere_placa: boolean;
+  requiere_provincia: boolean;
+  visible_para_operativo: boolean;
   requiere_comprobante: boolean;
-  requiere_adjunto: boolean;
   requiere_detalle: boolean;
   mensaje_detalle?: string;
 }
@@ -113,26 +141,42 @@ export interface RCDetalleItem {
   requerimiento_id: number | string;
   subgasto_id: number | SubGastoItem;
   lima_provincia: 'L' | 'P';
+  provincia_id?: number | string;
   costo: number | string;
+  placa?: string;
   nro_factura?: string;
   nro_ruc?: string;
-  origen?: number | string;
+  origen?: number | string; // Se usa para 'origen' en taxis y para 'entidad' en gastos únicos
   destino?: number | string;
   detalle?: string;
   fecha_gasto?: string;
   adj_cajachica?: string | File;
 }
 
+export interface UsuarioItem {
+  id: number;
+  username: string;
+  first_name?: string;
+  last_name?: string;
+  full_name: string;
+  email?: string;
+  area?: string;
+  puesto?: string;
+}
+
 export interface RequerimientoCajaChicaItem {
-  id?: number;
-  usuario_id: number | string;
-  area_id?: number | string;
+  id: number;
+  url?: string;
+  usuario_id: UsuarioItem; // Objeto de usuario completo
+  area_id?: string; // Nombre del área como texto (ej: "Sistemas", "Operaciones")
   monto_solicitado: number | string;
   total_gastado: number | string;
   estado_requerimiento: EstadoObjeto;
   obs?: string;
   fecha_solicitud?: string;
   fecha_liquidacion?: string;
+  created_by?: string; // Nombre completo del usuario creador (ej: "Juan Perez")
+  detalles?: RCDetalleItem[]; // Lista de detalles/comprobantes con su subgasto_id limpio
 }
 ```
 
@@ -451,16 +495,16 @@ export const ModalRegistrarGasto: React.FC<Props> = ({
             />
           </div>
 
-          {/* Subida de Foto / Ticket */}
+          {/* Subida de Foto / Ticket (Siempre obligatorio) */}
           <div className="form-group">
             <label>
-              Adjuntar Foto / Comprobante {activeSubGasto?.requiere_adjunto && '*'}
+              Adjuntar Foto / Comprobante *
             </label>
             <input
               type="file"
               accept="image/*,.pdf"
               onChange={(e) => setSelectedFile(e.target.files?.[0] || null)}
-              required={activeSubGasto?.requiere_adjunto}
+              required
             />
           </div>
 

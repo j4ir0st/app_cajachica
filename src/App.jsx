@@ -4,6 +4,7 @@ import MainLayout from './layouts/MainLayout';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import NewRequest from './pages/NewRequest';
+import MisSolicitudes from './pages/MisSolicitudes';
 import { useUserStore } from './store/userStore';
 
 /**
@@ -35,9 +36,8 @@ function App() {
           <Route index element={<Navigate to="dashboard" replace />} />
           <Route path="dashboard" element={<Dashboard />} />
           
-          {/* Placeholders para futuras secciones (Basado en README.md) */}
           <Route path="nueva-solicitud" element={<NewRequest />} />
-          <Route path="mis-solicitudes" element={<div className="p-8"><h2 className="text-2xl font-bold">Mis Solicitudes (En desarrollo)</h2></div>} />
+          <Route path="mis-solicitudes" element={<MisSolicitudes />} />
           <Route path="aprobaciones" element={<div className="p-8"><h2 className="text-2xl font-bold">Aprobaciones (En desarrollo)</h2></div>} />
           <Route path="cierre-caja" element={<div className="p-8"><h2 className="text-2xl font-bold">Cierre de Caja (En desarrollo)</h2></div>} />
           <Route path="balance" element={<div className="p-8"><h2 className="text-2xl font-bold">Balance Semanal (En desarrollo)</h2></div>} />
