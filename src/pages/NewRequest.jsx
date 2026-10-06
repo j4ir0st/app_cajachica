@@ -538,7 +538,7 @@ const NewRequest = () => {
   };
 
   return (
-    <div className="h-[calc(100vh-6rem)] flex flex-col pt-4 pb-4 px-4 md:px-8 animate-fade-in font-outfit overflow-hidden relative">
+    <div className="h-[calc(100vh-5.5rem)] md:h-[calc(100vh-6rem)] flex flex-col pt-3 pb-2 px-4 md:px-8 animate-fade-in font-outfit overflow-hidden relative">
       {/* Notificación Flotante Toast */}
       {notificacion && (
         <Toast
@@ -551,13 +551,10 @@ const NewRequest = () => {
 
       <div className="w-full flex flex-col h-full">
         {/* Encabezado de la página */}
-        <div className="flex items-center justify-between mb-2 shrink-0">
+        <div className="flex items-center justify-between mb-1.5 shrink-0">
           <div>
-            <span className="text-[10px] font-black uppercase tracking-widest text-brand-primary">
-              {esModoEdicion ? `Editando Requerimiento #${cabecera.id}` : 'Registro de Caja Chica'}
-            </span>
             <h1 className="text-xl font-black text-brand-dark tracking-tight p-0 m-0">
-              {esModoEdicion ? 'Continuar Llenado de Solicitud' : 'Nueva Solicitud de Caja Chica'}
+              {esModoEdicion ? `Continuar Solicitud #${cabecera.id}` : 'Nueva Solicitud de Caja Chica'}
             </h1>
             <p className="text-xs text-gray-400 mt-0.5 p-0 m-0">
               {esModoEdicion
@@ -567,18 +564,21 @@ const NewRequest = () => {
           </div>
           <button
             onClick={() => navigate(-1)}
-            className="p-2.5 rounded-2xl text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors p-0 m-0"
+            className="p-2 rounded-2xl text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors"
           >
             <X size={20} />
           </button>
         </div>
 
         {/* Tarjeta principal */}
-        <div className="bg-white rounded-3xl shadow-xl shadow-gray-100/50 border border-gray-100 flex flex-col flex-1 min-h-0">
-          {/* Sección scrollable */}
-          <div className="flex-1 overflow-y-auto md:px-8 pt-5 pb-0 min-h-0">
+        <div className="bg-white rounded-3xl shadow-xl shadow-gray-100/50 border border-gray-100 flex flex-col flex-1 min-h-0 overflow-hidden">
+          {/* Stepper Fijo Superior */}
+          <div className="px-4 md:px-8 pt-3 pb-2 border-b border-gray-50 shrink-0">
             <Stepper pasoActual={pasoActual} pasos={PASOS} />
+          </div>
 
+          {/* Sección scrollable del formulario */}
+          <div className="flex-1 overflow-y-auto px-4 md:px-8 pt-2.5 pb-3 min-h-0">
             {/* Contenido del paso activo */}
             {pasoActual === 1 && (
               <Step1Cabecera datos={cabecera} onChange={actualizarCabecera} />
@@ -602,36 +602,37 @@ const NewRequest = () => {
             )}
           </div>
 
-          {/* Barra de navegación inferior */}
-          <div className="flex items-center justify-between py-3 px-4 md:px-8 border-t border-gray-50 shrink-0">
+          {/* Barra de navegación inferior (Footer Fijo) */}
+          <div className="flex items-center justify-between py-2 px-4 md:px-8 border-t border-gray-100 shrink-0 bg-white">
             <button
               onClick={pasoActual === 1 ? () => navigate(-1) : irAnterior}
-              className="flex items-center gap-2 px-5 py-2.5 rounded-2xl border-2 border-gray-200 text-sm font-bold text-gray-500 hover:bg-gray-50 hover:border-gray-300 transition-all"
+              className="flex items-center gap-1.5 px-4 py-2 rounded-xl border-2 border-gray-200 text-xs sm:text-sm font-bold text-gray-500 hover:bg-gray-50 hover:border-gray-300 transition-all"
             >
-              <ArrowLeft size={16} />
-              {pasoActual === 1 ? 'Cancelar' : 'Anterior'}
+              <ArrowLeft size={15} />
+              <span>{pasoActual === 1 ? 'Cancelar' : 'Anterior'}</span>
             </button>
 
             {pasoActual < 3 ? (
               <button
                 onClick={irSiguiente}
                 disabled={!pasoValido}
-                className={`flex items-center gap-2 px-6 py-2.5 rounded-2xl text-sm font-bold transition-all ${
+                className={`flex items-center gap-1.5 px-5 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all ${
                   pasoValido
-                    ? 'bg-brand-primary text-white hover:bg-brand-secondary hover:shadow-lg hover:shadow-brand-primary/20 hover:-translate-y-0.5'
+                    ? 'bg-brand-primary text-white hover:bg-brand-secondary hover:shadow-md hover:shadow-brand-primary/20'
                     : 'bg-gray-100 text-gray-300 cursor-not-allowed'
                 }`}
               >
-                Siguiente
-                <ArrowRight size={16} />
+                <span>Siguiente</span>
+                <ArrowRight size={15} />
               </button>
             ) : (
               <div className="flex items-center gap-2">
+                {/* Botón Guardar Borrador: Oculto en móvil (solo visible en escritorio), en celular se usa el botón al final del scroll */}
                 <button
                   type="button"
                   onClick={() => enviarSolicitud('PD')}
                   disabled={enviando}
-                  className="flex items-center gap-2 px-4 py-2.5 rounded-2xl border-2 border-amber-300 bg-amber-50 text-amber-800 text-xs font-bold hover:bg-amber-100 transition-all disabled:opacity-50"
+                  className="hidden sm:flex items-center gap-1.5 px-3.5 py-2 rounded-xl border-2 border-amber-300 bg-amber-50 text-amber-800 text-xs font-bold hover:bg-amber-100 transition-all disabled:opacity-50"
                 >
                   <Save size={14} />
                   <span>Guardar Borrador</span>
@@ -641,7 +642,7 @@ const NewRequest = () => {
                   type="button"
                   onClick={() => enviarSolicitud('LQ')}
                   disabled={enviando}
-                  className="flex items-center gap-2 px-5 py-2.5 rounded-2xl bg-gradient-to-r from-blue-600 to-indigo-600 text-white text-xs font-black shadow-md shadow-blue-500/20 hover:scale-[1.02] transition-all disabled:opacity-50"
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 text-white text-xs font-black shadow-md shadow-blue-500/20 hover:scale-[1.02] transition-all disabled:opacity-50"
                 >
                   <Send size={14} />
                   <span>{enviando ? 'Enviando...' : 'Enviar y Liquidar'}</span>

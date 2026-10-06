@@ -5,6 +5,7 @@ import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import NewRequest from './pages/NewRequest';
 import MisSolicitudes from './pages/MisSolicitudes';
+import CierreCaja from './pages/CierreCaja';
 import { useUserStore } from './store/userStore';
 
 /**
@@ -39,7 +40,7 @@ function App() {
           <Route path="nueva-solicitud" element={<NewRequest />} />
           <Route path="mis-solicitudes" element={<MisSolicitudes />} />
           <Route path="aprobaciones" element={<div className="p-8"><h2 className="text-2xl font-bold">Aprobaciones (En desarrollo)</h2></div>} />
-          <Route path="cierre-caja" element={<div className="p-8"><h2 className="text-2xl font-bold">Cierre de Caja (En desarrollo)</h2></div>} />
+          <Route path="cierre-caja" element={<CierreCaja />} />
           <Route path="balance" element={<div className="p-8"><h2 className="text-2xl font-bold">Balance Semanal (En desarrollo)</h2></div>} />
         </Route>
 

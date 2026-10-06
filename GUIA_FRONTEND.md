@@ -77,10 +77,23 @@ El modelo `RC_SubGasto` contiene banderas booleanas que le indican al Frontend *
 
 | Operación | Método | URL | Body / Query |
 | :--- | :--- | :--- | :--- |
-| **Listar** | `GET` | `/Requerimiento_CajaChica/` | `?page=1&top=50&search=movilidad` |
+| **Listar con Filtros** | `GET` | `/Requerimiento_CajaChica/` | `?usuario_id=15&estado_requerimiento=LQ,PD&area_id=3&page=1` |
 | **Obtener** | `GET` | `/Requerimiento_CajaChica/<ID>/` | — |
 | **Crear** | `POST` | `/Requerimiento_CajaChica/` | `{"monto_solicitado": 250.00, "obs": "...", "area_id": 3, "usuario_id": 15}` |
+| **Editar / Sincronizar** | `PATCH` | `/Requerimiento_CajaChica/<ID>/` | `{"obs": "...", "detalles": [...]}` (Solo en estado `PD`) |
 | **Liquidar** | `POST` | `/Requerimiento_CajaChica/<ID>/liquidar/` | `{"obs": "Rendición finalizada"}` |
+
+> [!TIP]
+> **Filtros Disponibles en `/Requerimiento_CajaChica/`:**
+> - `?estado_requerimiento=LQ,PD`: **Filtro de tipo `IN`** (uno o varios estados separados por coma. Ej: `LQ,PD` para "Mis Solicitudes").
+> - `?id=<ID>` o `?id__in=10,11,12`: Filtro exacto o lista de IDs.
+> - `?usuario_id=<ID>` o `?usuario_id__in=15,16`: Filtro por ID de usuario solicitante.
+> - `?usuario=<texto>`: Búsqueda por username (contiene, insensible a mayúsculas).
+> - `?area_id=<ID>` o `?area_id__in=3,4`: Filtro por ID de área.
+> - `?area=<texto>`: Búsqueda por nombre de área.
+> - `?fecha_solicitud_desde=YYYY-MM-DD` / `?fecha_solicitud_hasta=YYYY-MM-DD`: Rango de fechas.
+> - `?search=<texto>`: Búsqueda global en ID, observaciones, username, nombres de usuario y área.
+> - `?ordering=-id|fecha_solicitud|monto_solicitado`: Ordenamiento.
 
 ### B. Detalles / Comprobantes de Gasto (`/RC_Detalle/`)
 

@@ -11,6 +11,7 @@ import { limpiarCatalogos } from '../utils/catalogoCache';
 const Header = () => {
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [cacheLimpiado, setCacheLimpiado] = useState(false);
+  const [recargandoLiquidaciones, setRecargandoLiquidaciones] = useState(false);
   const { user, logout } = useUserStore();
   const { cargarCatalogos } = useCatalogoStore();
   const navigate = useNavigate();
@@ -20,12 +21,19 @@ const Header = () => {
     navigate('/login');
   };
 
-  // Limpia todos los catálogos guardados en memoria y fuerza la recarga desde la API
+  // Limpia todos los catálogos guardados en memoria y fuerza la recarga desde la API (al pulsar título)
   const handleLimpiarCache = () => {
     limpiarCatalogos();
     cargarCatalogos(true); // Forzar recarga inmediata
     setCacheLimpiado(true);
     setTimeout(() => setCacheLimpiado(false), 2000);
+  };
+
+  // Actualiza exclusivamente el listado de liquidaciones (al pulsar botón móvil)
+  const handleRecargarLiquidaciones = () => {
+    window.dispatchEvent(new CustomEvent('app:recargar-datos'));
+    setRecargandoLiquidaciones(true);
+    setTimeout(() => setRecargandoLiquidaciones(false), 1200);
   };
 
   return (
@@ -71,13 +79,26 @@ const Header = () => {
       </div>
 
       {/* Acciones e Info de Usuario */}
-      <div className="flex items-center gap-6">
-        {/* Notificaciones Premium */}
+      <div className="flex items-center gap-3 sm:gap-6">
+        {/* Botón Nueva Rendición */}
         <button
           onClick={() => navigate('/nueva-solicitud')}
-          className="relative p-2.5 text-gray-400 hover:text-brand-primary hover:bg-brand-light rounded-2xl transition-premium group"
+          title="Nueva Rendición"
+          className="relative p-2 text-gray-400 hover:text-brand-primary hover:bg-brand-light rounded-2xl transition-premium group"
         >
           <PlusCircle size={22} />
+        </button>
+
+        {/* Botón de Actualizar Liquidaciones (Exclusivo para vista móvil) */}
+        <button
+          onClick={handleRecargarLiquidaciones}
+          title="Actualizar listado de liquidaciones"
+          className="flex sm:hidden relative p-2 text-gray-400 hover:text-brand-primary hover:bg-brand-light rounded-2xl transition-premium group"
+        >
+          <RefreshCw
+            size={20}
+            className={`transition-all ${recargandoLiquidaciones ? 'animate-spin text-brand-primary' : ''}`}
+          />
         </button>
 
         {/* Separador */}

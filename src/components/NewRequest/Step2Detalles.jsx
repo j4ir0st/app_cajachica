@@ -500,28 +500,29 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
 
   return (
     <div className="space-y-4 animate-fade-in font-outfit pb-4">
-      {/* Cabecera y Resumen de Presupuesto */}
-      <div className="bg-white rounded-2xl p-4 border border-gray-100 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+      {/* Cabecera del Paso 2 (Idéntica estructura y altura que Paso 1 y Paso 3) */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
         <div>
           <h2 className="text-lg font-black text-brand-dark tracking-tight">Comprobantes de Gasto</h2>
-          <p className="text-xs text-gray-400">
+          <p className="text-xs text-gray-400 mt-0.5">
             {detalles.length === 0
               ? 'Aún no ha registrado ningún gasto. Presione el botón para agregar.'
               : `${detalles.length} comprobante(s) registrado(s)`}
           </p>
         </div>
 
-        <div className="flex items-center justify-between sm:justify-end gap-4 bg-brand-light/60 px-4 py-2.5 rounded-xl border border-brand-primary/10">
+        {/* Resumen de Presupuesto Compacto */}
+        <div className="flex items-center justify-between sm:justify-end gap-3 bg-brand-light/70 px-3.5 py-1.5 rounded-xl border border-brand-primary/15 self-start sm:self-auto">
           <div className="text-left sm:text-right">
-            <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block">Total Acumulado</span>
-            <span className={`text-base font-black ${superaLimite ? 'text-red-500' : 'text-brand-primary'}`}>
+            <span className="text-[9px] font-bold text-gray-400 uppercase tracking-wider block">Total Acumulado</span>
+            <span className={`text-xs font-black ${superaLimite ? 'text-red-500' : 'text-brand-primary'}`}>
               S/ {totalActual.toFixed(2)}
             </span>
           </div>
           {montoLimite && (
-            <div className="border-l border-gray-200 pl-4 text-left sm:text-right">
-              <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block">Límite Solicitado</span>
-              <span className="text-sm font-bold text-gray-600">S/ {parseFloat(montoLimite).toFixed(2)}</span>
+            <div className="border-l border-gray-200 pl-3 text-left sm:text-right">
+              <span className="text-[9px] font-bold text-gray-400 uppercase tracking-wider block">Límite Solicitado</span>
+              <span className="text-xs font-bold text-gray-600">S/ {parseFloat(montoLimite).toFixed(2)}</span>
             </div>
           )}
         </div>

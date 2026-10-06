@@ -113,10 +113,10 @@ const Step1Cabecera = ({ datos, onChange }) => {
   };
 
   return (
-    <div className="space-y-5 animate-fade-in">
+    <div className="space-y-4 animate-fade-in font-outfit">
       <div>
-        <h2 className="text-xl font-black text-brand-dark tracking-tight">Datos del Requerimiento</h2>
-        <p className="text-sm text-gray-400 mt-0.5">Complete los datos generales de la solicitud de caja chica.</p>
+        <h2 className="text-lg font-black text-brand-dark tracking-tight">Datos del Requerimiento</h2>
+        <p className="text-xs text-gray-400 mt-0.5">Complete los datos generales de la solicitud de caja chica.</p>
       </div>
 
       {/* Alerta si falta el área del usuario */}
