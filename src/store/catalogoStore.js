@@ -42,7 +42,6 @@ export const useCatalogoStore = create((set, get) => ({
     };
 
     try {
-      console.log('[catalogoStore] Iniciando carga de catálogos...');
       const [tiposData, subData, entData, provData] = await Promise.all([
         resuelveCatalogo(CLAVES_CATALOGO.tiposGasto, `${API_URL}/RC_TipoGasto/?format=json`),
         resuelveCatalogo(CLAVES_CATALOGO.subgastos, `${API_URL}/RC_SubGasto/?format=json`),
@@ -50,12 +49,7 @@ export const useCatalogoStore = create((set, get) => ({
         resuelveCatalogo(CLAVES_CATALOGO.provincias, `${API_URL}/RC_Provincia/?format=json&top=200`),
       ]);
 
-      console.log('[catalogoStore] Catálogos cargados exitosamente:', {
-        tipos: tiposData.length,
-        subgastos: subData.length,
-        entidades: entData.length,
-        provincias: provData.length
-      });
+      console.log(`[Catálogos] ✅ Tablas maestras cargadas: Tipos (${tiposData.length}), Subgastos (${subData.length}), Entidades (${entData.length}), Provincias (${provData.length}).`);
 
       set({
         tiposGasto: tiposData,
@@ -65,7 +59,7 @@ export const useCatalogoStore = create((set, get) => ({
         cargando: false
       });
     } catch (err) {
-      console.error('[catalogoStore] Error crítico cargando catálogos:', err);
+      console.error('[Catálogos] ❌ Error al cargar tablas maestras:', err.message || err);
       set({
         error: `Error al cargar datos: ${err.message}`,
         cargando: false

@@ -6,6 +6,8 @@ import Dashboard from './pages/Dashboard';
 import NewRequest from './pages/NewRequest';
 import MisSolicitudes from './pages/MisSolicitudes';
 import CierreCaja from './pages/CierreCaja';
+import Aprobaciones from './pages/Aprobaciones';
+import BalanceSemanal from './pages/BalanceSemanal';
 import { useUserStore } from './store/userStore';
 
 /**
@@ -39,9 +41,9 @@ function App() {
           
           <Route path="nueva-solicitud" element={<NewRequest />} />
           <Route path="mis-solicitudes" element={<MisSolicitudes />} />
-          <Route path="aprobaciones" element={<div className="p-8"><h2 className="text-2xl font-bold">Aprobaciones (En desarrollo)</h2></div>} />
+          <Route path="aprobaciones" element={<Aprobaciones />} />
           <Route path="cierre-caja" element={<CierreCaja />} />
-          <Route path="balance" element={<div className="p-8"><h2 className="text-2xl font-bold">Balance Semanal (En desarrollo)</h2></div>} />
+          <Route path="balance" element={<BalanceSemanal />} />
         </Route>
 
         {/* Redirección por defecto a dashboard */}

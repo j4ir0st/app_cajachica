@@ -95,7 +95,10 @@ export const fetchAuth = async (url, opciones = {}) => {
   const urlFinal = url.replace(/([^:]\/)\/+/g, "$1");
 
   const construirCabeceras = (tkn) => {
-    const headers = { ...opciones.headers };
+    const headers = {
+      'Accept': 'application/json',
+      ...opciones.headers,
+    };
     if (tkn) {
       headers['Authorization'] = `Bearer ${tkn}`;
     }
@@ -132,6 +135,60 @@ export const fetchAuth = async (url, opciones = {}) => {
   } catch (error) {
     console.error(`[fetchAuth] Error de red en ${urlFinal}:`, error);
     throw error;
+  }
+};
+
+/**
+ * Extrae y formatea limpiamente el mensaje de error devuelto por la API,
+ * soportando objetos JSON, excepciones de DRF y respuestas con HTML escapado.
+ */
+export const extraerMensajeError = async (respuesta) => {
+  try {
+    const textoPlano = await respuesta.text();
+
+    // 1. Intentar parsear JSON directo
+    try {
+      const datosJson = JSON.parse(textoPlano);
+      if (datosJson.mensaje_personalizado) {
+        const tecnico = datosJson.error_tecnico ? `\nDetalle: ${datosJson.error_tecnico}` : '';
+        return `${datosJson.mensaje_personalizado}${tecnico}`;
+      }
+      if (datosJson.detail && datosJson.error_tecnico) {
+        return `${datosJson.detail}\nDetalle técnico: ${datosJson.error_tecnico}`;
+      }
+      if (datosJson.detail) return datosJson.detail;
+      if (datosJson.error) return datosJson.error;
+      if (typeof datosJson === 'object') {
+        const primerError = Object.entries(datosJson)
+          .map(([campo, msg]) => `${campo}: ${Array.isArray(msg) ? msg.join(', ') : msg}`)
+          .join(' | ');
+        if (primerError) return primerError;
+      }
+      return JSON.stringify(datosJson);
+    } catch {
+      // 2. Si viene envuelto en HTML o entidades codificadas
+      const matchJson = textoPlano.match(/\{[\s\S]*\}/);
+      if (matchJson) {
+        const jsonLimpio = matchJson[0]
+          .replace(/&quot;/g, '"')
+          .replace(/&#x27;/g, "'")
+          .replace(/&lt;/g, '<')
+          .replace(/&gt;/g, '>');
+        try {
+          const parseado = JSON.parse(jsonLimpio);
+          if (parseado.mensaje_personalizado) {
+            const tec = parseado.error_tecnico ? `\nDetalle: ${parseado.error_tecnico}` : '';
+            return `${parseado.mensaje_personalizado}${tec}`;
+          }
+          return parseado.error_tecnico || parseado.mensaje_personalizado || jsonLimpio;
+        } catch {
+          return jsonLimpio;
+        }
+      }
+      return textoPlano.length > 200 ? textoPlano.slice(0, 200) + '...' : textoPlano;
+    }
+  } catch {
+    return `Error de servidor (${respuesta.status})`;
   }
 };
 

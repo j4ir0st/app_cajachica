@@ -24,7 +24,7 @@ import {
   ArrowRight
 } from 'lucide-react';
 import { useUserStore } from '../store/userStore';
-import { fetchAuth } from '../utils/fetchAuth';
+import { fetchAuth, extraerMensajeError } from '../utils/fetchAuth';
 import Toast from '../components/Toast';
 
 const API_URL = import.meta.env.DEV ? '' : (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
@@ -45,29 +45,6 @@ const obtenerNombreSolicitante = (usuario) => {
     return usuario.startsWith('http') ? 'Usuario' : usuario;
   }
   return '—';
-};
-
-/**
- * Extrae de forma limpia el mensaje de error del backend.
- */
-const extraerMensajeError = async (respuesta) => {
-  try {
-    const datosJson = await respuesta.json();
-    if (datosJson.detail && datosJson.error_tecnico) {
-      return `${datosJson.detail}\nDetalle técnico: ${datosJson.error_tecnico}`;
-    }
-    if (datosJson.detail) return datosJson.detail;
-    if (datosJson.error) return datosJson.error;
-    if (typeof datosJson === 'object') {
-      const primerError = Object.entries(datosJson)
-        .map(([campo, msg]) => `${campo}: ${Array.isArray(msg) ? msg.join(', ') : msg}`)
-        .join(' | ');
-      if (primerError) return primerError;
-    }
-    return JSON.stringify(datosJson);
-  } catch {
-    return `Error de servidor (${respuesta.status})`;
-  }
 };
 
 /**
@@ -110,6 +87,7 @@ const CierreCaja = () => {
   const [nuevoIngresoManual, setNuevoIngresoManual] = useState('');
   const [fechaInicio, setFechaInicio] = useState(obtenerFechaLunesActual());
   const [fechaFin, setFechaFin] = useState(obtenerFechaHoy());
+  const [observaciones, setObservaciones] = useState('');
 
   // Modal de Detalle / Auditoría de Solicitud
   const [solicitudSeleccionada, setSolicitudSeleccionada] = useState(null);
@@ -145,8 +123,9 @@ const CierreCaja = () => {
         : [];
 
       setSolicitudesLiquidadas(ordenadas);
+      console.log(`[CierreCaja] ✅ Cargadas ${ordenadas.length} solicitudes liquidadas para cierre.`);
     } catch (err) {
-      console.error('[CierreCaja] Error al cargar liquidaciones:', err);
+      console.error('[CierreCaja] ❌ Error al cargar liquidaciones:', err.message || err);
       setNotificacion({
         tipo: 'error',
         titulo: 'Error de Conexión',
@@ -258,46 +237,67 @@ const CierreCaja = () => {
     setMostrarModalConfirmacion(false);
 
     try {
-      // Actualizar secuencialmente las solicitudes a estado Cerrado ('CD')
-      let exitosos = 0;
-      let fallidos = 0;
+      const idsRequerimientos = solicitudesLiquidadas.map((req) => req.id);
 
-      for (const req of solicitudesLiquidadas) {
-        try {
-          const res = await fetchAuth(`${API_URL}/Requerimiento_CajaChica/${req.id}/?format=json`, {
-            method: 'PATCH',
+      const payloadCierre = {
+        fecha_inicio: fechaInicio,
+        fecha_fin: fechaFin,
+        saldo_inicial: saldoInicialNum,
+        total_gasto: gastoTotalSemana,
+        saldo_final: saldoFinal,
+        nuevo_ingreso: nuevoIngresoSugerido,
+        observaciones: observaciones.trim() || `Cierre semanal del ${fechaInicio} al ${fechaFin}`,
+        requerimientos: idsRequerimientos.join(','),
+      };
+
+      // 1. Ejecutar Cierre Atómico en /RC_SaldoSemanal/ según GUIA_FRONTEND.md
+      const res = await fetchAuth(`${API_URL}/RC_SaldoSemanal/?format=json`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payloadCierre),
+      });
+
+      if (!res.ok) {
+        // En caso de que se use la acción secundaria /cerrar-caja/
+        if (res.status === 404 || res.status === 405) {
+          const resFallback = await fetchAuth(`${API_URL}/RC_SaldoSemanal/cerrar-caja/?format=json`, {
+            method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              estado_requerimiento: 'CD',
-            }),
+            body: JSON.stringify(payloadCierre),
           });
-
-          if (res.ok) {
-            exitosos++;
-          } else {
-            fallidos++;
+          if (!resFallback.ok) {
+            const errDet = await extraerMensajeError(resFallback);
+            throw new Error(errDet);
           }
-        } catch {
-          fallidos++;
+          const dataFallback = await resFallback.json();
+          const codigoGenerado = dataFallback.codigo_cierre || `Cierre #${dataFallback.id}`;
+          setNotificacion({
+            tipo: 'exito',
+            titulo: 'Cierre de Caja Exitoso',
+            mensaje: `Se generó el registro ${codigoGenerado} y se cerraron formalmente ${solicitudesLiquidadas.length} solicitudes liquidadas.`,
+          });
+          setObservaciones('');
+          await cargarSolicitudesLiquidadas();
+          return;
         }
+
+        const errorDetallado = await extraerMensajeError(res);
+        throw new Error(errorDetallado);
       }
 
-      if (fallidos === 0) {
-        setNotificacion({
-          tipo: 'exito',
-          titulo: 'Cierre de Caja Exitoso',
-          mensaje: `Se cerraron formalmente ${exitosos} solicitudes liquidadas con un total de S/ ${gastoTotalSemana.toFixed(2)}.`,
-        });
-      } else {
-        setNotificacion({
-          tipo: 'advertencia',
-          titulo: 'Cierre Parcial',
-          mensaje: `Se cerraron ${exitosos} solicitudes, pero ${fallidos} presentaron errores al actualizar.`,
-        });
-      }
+      const dataCierre = await res.json();
+      const codigoGenerado = dataCierre.codigo_cierre || `Cierre #${dataCierre.id}`;
 
+      setNotificacion({
+        tipo: 'exito',
+        titulo: 'Cierre de Caja Exitoso',
+        mensaje: `Se generó el registro de saldo semanal ${codigoGenerado} y se cerraron formalmente ${solicitudesLiquidadas.length} solicitudes liquidadas.`,
+      });
+
+      setObservaciones('');
       await cargarSolicitudesLiquidadas();
     } catch (err) {
+      console.error('[CierreCaja] Error al ejecutar cierre semanal:', err);
       setNotificacion({
         tipo: 'error',
         titulo: 'Error durante el Cierre',
@@ -488,7 +488,7 @@ const CierreCaja = () => {
               const montoSol = parseFloat(req.monto_solicitado) || 0;
               const totalGast = parseFloat(req.total_gastado) || 0;
               const nombreSolicitante = obtenerNombreSolicitante(req.usuario_id);
-              const numComprobantes = req.detalles?.length || 0;
+              const numComprobantes = (req.detalle || req.detalles || []).length;
 
               return (
                 <div
@@ -623,6 +623,20 @@ const CierreCaja = () => {
               </div>
             </div>
 
+            {/* Observaciones del Cierre */}
+            <div className="space-y-1">
+              <label className="text-[10px] font-bold text-gray-500 uppercase tracking-wider block">
+                Observaciones del Cierre (Opcional):
+              </label>
+              <input
+                type="text"
+                placeholder={`Cierre semanal del ${fechaInicio} al ${fechaFin}`}
+                value={observaciones}
+                onChange={(e) => setObservaciones(e.target.value)}
+                className="w-full bg-brand-light/40 border border-gray-200 focus:border-brand-primary rounded-xl px-3 py-2 text-xs font-semibold text-brand-dark outline-none transition-colors placeholder:text-gray-400 placeholder:font-normal"
+              />
+            </div>
+
             <div className="grid grid-cols-2 gap-2 pt-2">
               <button
                 type="button"
@@ -679,7 +693,7 @@ const CierreCaja = () => {
                 </div>
               </div>
 
-              {solicitudSeleccionada.detalles?.map((det, idx) => (
+              {(solicitudSeleccionada.detalle || solicitudSeleccionada.detalles || []).map((det, idx) => (
                 <div key={det.url || idx} className="p-3 bg-white rounded-xl border border-gray-100 flex items-center justify-between gap-3">
                   <div className="flex items-center gap-3">
                     {det.adj_cajachica ? (

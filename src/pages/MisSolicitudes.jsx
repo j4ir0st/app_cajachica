@@ -159,9 +159,61 @@ const MisSolicitudes = () => {
 
   // Modal de Detalle y Visor de Imagen
   const [solicitudSeleccionada, setSolicitudSeleccionada] = useState(null);
+  const [detallesModal, setDetallesModal] = useState([]);
+  const [cargandoDetallesModal, setCargandoDetallesModal] = useState(false);
   const [imagenModal, setImagenModal] = useState(null);
   const [liquidando, setLiquidando] = useState(false);
   const [obsLiquidacion, setObsLiquidacion] = useState('');
+
+  // Sincronización y fallback de comprobantes al abrir el modal
+  useEffect(() => {
+    if (!solicitudSeleccionada) {
+      setDetallesModal([]);
+      return;
+    }
+
+    const items = solicitudSeleccionada.detalle || solicitudSeleccionada.detalles;
+    if (Array.isArray(items) && items.length > 0) {
+      setDetallesModal(items);
+      console.log(`[MisSolicitudes] ✅ Mostrando ${items.length} comprobantes para Requerimiento #${solicitudSeleccionada.id}`);
+    } else {
+      // Si la lista vino sin detalle anidado, consultar el requerimiento individual o los comprobantes directos
+      const cargarDetallesRemotos = async () => {
+        setCargandoDetallesModal(true);
+        try {
+          // 1. Intentar obtener el requerimiento completo con su detalle serializado
+          const resReq = await fetchAuth(`${API_URL}/Requerimiento_CajaChica/${solicitudSeleccionada.id}/?format=json`);
+          if (resReq.ok) {
+            const dataReq = await resReq.json();
+            const itemsReq = dataReq.detalle || dataReq.detalles;
+            if (Array.isArray(itemsReq) && itemsReq.length > 0) {
+              setDetallesModal(itemsReq);
+              console.log(`[MisSolicitudes] ✅ Cargados ${itemsReq.length} comprobantes desde detalle para Requerimiento #${solicitudSeleccionada.id}`);
+              return;
+            }
+          }
+
+          // 2. Fallback complementario vía RC_Detalle
+          const resDet = await fetchAuth(`${API_URL}/RC_Detalle/?requerimiento_id=${solicitudSeleccionada.id}&format=json`);
+          if (resDet.ok) {
+            const dataDet = await resDet.json();
+            const listaDet = dataDet.results ?? (Array.isArray(dataDet) ? dataDet : []);
+            setDetallesModal(listaDet);
+            console.log(`[MisSolicitudes] ✅ Cargados ${listaDet.length} comprobantes desde RC_Detalle para Requerimiento #${solicitudSeleccionada.id}`);
+          } else {
+            console.warn(`[MisSolicitudes] ⚠️ No se encontraron comprobantes para Requerimiento #${solicitudSeleccionada.id}`);
+            setDetallesModal([]);
+          }
+        } catch (errDet) {
+          console.error(`[MisSolicitudes] ❌ Error al cargar comprobantes de Requerimiento #${solicitudSeleccionada.id}:`, errDet.message || errDet);
+          setDetallesModal([]);
+        } finally {
+          setCargandoDetallesModal(false);
+        }
+      };
+      cargarDetallesRemotos();
+    }
+  }, [solicitudSeleccionada]);
 
   // ============================================================================
   // CARGA DE DATOS DE LA API
@@ -194,8 +246,9 @@ const MisSolicitudes = () => {
         : [];
 
       setSolicitudes(ordenadas);
+      console.log(`[MisSolicitudes] ✅ Cargados ${ordenadas.length} requerimientos.`);
     } catch (err) {
-      console.error('[MisSolicitudes] Error al cargar:', err);
+      console.error(`[MisSolicitudes] ❌ Error al cargar requerimientos:`, err.message || err);
       setNotificacion({
         tipo: 'error',
         titulo: 'Error al Cargar Solicitudes',
@@ -237,7 +290,7 @@ const MisSolicitudes = () => {
         const solicitanteTexto = obtenerNombreSolicitante(req.usuario_id).toLowerCase();
         const areaTexto = String(req.area_id || '').toLowerCase();
         const fechaTexto = (req.fecha_solicitud || '').toLowerCase();
-        const detallesTexto = (req.detalles || [])
+        const detallesTexto = (req.detalle || req.detalles || [])
           .map((d) => `${d.detalle || ''} ${d.nro_factura || ''} ${d.nro_ruc || ''} ${d.placa || ''} ${d.subgasto_id?.nombre || ''}`)
           .join(' ')
           .toLowerCase();
@@ -285,7 +338,7 @@ const MisSolicitudes = () => {
       return;
     }
 
-    const listaDetalles = req.detalles || [];
+    const listaDetalles = req.detalle || req.detalles || [];
     if (listaDetalles.length === 0) {
       setNotificacion({
         tipo: 'error',
@@ -448,7 +501,8 @@ const MisSolicitudes = () => {
               const montoSol = parseFloat(req.monto_solicitado) || 0;
               const totalGast = parseFloat(req.total_gastado) || 0;
               const saldoDevolucion = montoSol - totalGast;
-              const numComprobantes = req.detalles?.length || 0;
+              const listaDet = req.detalle || req.detalles || [];
+              const numComprobantes = listaDet.length;
               const nombreSolicitante = obtenerNombreSolicitante(req.usuario_id);
 
               return (
@@ -502,14 +556,14 @@ const MisSolicitudes = () => {
 
                     <div className="text-right">
                       <span className="text-[9px] font-bold text-gray-400 uppercase tracking-wider block">
-                        {saldoDevolucion > 0 ? 'Saldo Restante' : 'Comprobantes'}
+                        {numComprobantes} {numComprobantes === 1 ? 'doc adjunto' : 'docs adjuntos'}
                       </span>
                       <span
                         className={`text-xs font-black ${
-                          saldoDevolucion > 0 ? 'text-amber-600 font-bold' : 'text-brand-primary'
+                          saldoDevolucion > 0 ? 'text-amber-600 font-bold' : 'text-emerald-600 font-bold'
                         }`}
                       >
-                        {saldoDevolucion > 0 ? `S/ ${saldoDevolucion.toFixed(2)}` : `${numComprobantes} doc(s)`}
+                        {saldoDevolucion > 0 ? `Resta S/ ${saldoDevolucion.toFixed(2)}` : 'Saldado S/ 0.00'}
                       </span>
                     </div>
                   </div>
@@ -659,24 +713,32 @@ const MisSolicitudes = () => {
                 )}
               </div>
 
-              {/* Lista de Comprobantes Anidados (`detalles`) */}
+              {/* Lista de Comprobantes Anidados (`detalle`) */}
               <div className="space-y-2">
                 <span className="text-xs font-black uppercase tracking-wider text-brand-dark block">
-                  Comprobantes Adjuntos ({solicitudSeleccionada.detalles?.length || 0})
+                  Comprobantes Adjuntos ({detallesModal.length})
                 </span>
 
-                {solicitudSeleccionada.detalles && solicitudSeleccionada.detalles.length > 0 ? (
+                {cargandoDetallesModal ? (
+                  <div className="flex flex-col items-center justify-center py-6 space-y-2 bg-gray-50 rounded-xl">
+                    <div className="w-5 h-5 border-2 border-brand-primary border-t-transparent rounded-full animate-spin" />
+                    <span className="text-[11px] text-gray-400 font-bold">Cargando comprobantes...</span>
+                  </div>
+                ) : detallesModal.length > 0 ? (
                   <div className="space-y-2.5">
-                    {solicitudSeleccionada.detalles.map((det, idx) => {
+                    {detallesModal.map((det, idx) => {
                       const nombreSubgasto =
                         typeof det.subgasto_id === 'object' && det.subgasto_id
                           ? det.subgasto_id.nombre
-                          : 'Comprobante de Gasto';
+                          : (typeof det.subgasto_id === 'string' ? det.subgasto_id : 'Comprobante de Gasto');
                       const tipoGasto = det.subgasto_id?.tipogasto_id?.nombre || null;
+                      const rutaOrigenDestino = det.origen_nombre && det.destino_nombre
+                        ? `${det.origen_nombre} → ${det.destino_nombre}`
+                        : (det.origen_nombre || det.destino_nombre || null);
 
                       return (
                         <div
-                          key={det.url || idx}
+                          key={det.id || det.url || idx}
                           className="bg-white rounded-2xl p-3.5 border border-gray-100 shadow-sm flex flex-col gap-2"
                         >
                           <div className="flex items-start justify-between gap-3">
@@ -712,6 +774,11 @@ const MisSolicitudes = () => {
                                 <h4 className="text-xs font-black text-brand-dark leading-snug">
                                   {nombreSubgasto}
                                 </h4>
+                                {rutaOrigenDestino && (
+                                  <p className="text-[11px] text-brand-primary font-semibold mt-0.5">
+                                    {rutaOrigenDestino}
+                                  </p>
+                                )}
                                 <p className="text-[11px] text-gray-500 mt-0.5">
                                   {det.detalle || 'Sin descripción'}
                                 </p>
@@ -729,9 +796,11 @@ const MisSolicitudes = () => {
                           </div>
 
                           <div className="flex flex-wrap gap-1 text-[10px] text-gray-500 font-semibold pt-1 border-t border-gray-50">
-                            <span className="px-2 py-0.5 bg-gray-50 rounded-md">
-                              {det.lima_provincia === 'L' ? 'Lima' : 'Provincia'}
-                            </span>
+                            {det.lima_provincia && (
+                              <span className="px-2 py-0.5 bg-gray-50 rounded-md">
+                                {det.lima_provincia === 'L' ? 'Lima' : 'Provincia'}
+                              </span>
+                            )}
                             {det.nro_factura && (
                               <span className="px-2 py-0.5 bg-gray-50 rounded-md">Doc: {det.nro_factura}</span>
                             )}
@@ -794,7 +863,10 @@ const MisSolicitudes = () => {
                 <button
                   type="button"
                   onClick={() => {
-                    const req = solicitudSeleccionada;
+                    const req = {
+                      ...solicitudSeleccionada,
+                      detalle: detallesModal.length > 0 ? detallesModal : (solicitudSeleccionada.detalle || solicitudSeleccionada.detalles),
+                    };
                     setSolicitudSeleccionada(null);
                     navigate('/nueva-solicitud', { state: { requerimientoAEditar: req } });
                   }}

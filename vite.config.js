@@ -68,6 +68,16 @@ export default defineConfig(({ mode }) => {
           changeOrigin: true,
           secure: false,
         },
+        '/RC_SaldoSemanal': {
+          target: target,
+          changeOrigin: true,
+          secure: false,
+        },
+        '/saldos_semanales': {
+          target: target,
+          changeOrigin: true,
+          secure: false,
+        },
       }
     },
   }

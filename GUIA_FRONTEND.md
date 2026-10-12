@@ -103,7 +103,79 @@ El modelo `RC_SubGasto` contiene banderas booleanas que le indican al Frontend *
 | **Crear Gasto** | `POST` | `/RC_Detalle/` | `multipart/form-data` (`requerimiento_id`, `subgasto_id`, `costo`, `lima_provincia`, `provincia_id`, `placa`, `origen`, `destino`, `nro_factura`, `nro_ruc`, `detalle`, `adj_cajachica`) |
 | **Eliminar Gasto** | `DELETE` | `/RC_Detalle/<ID>/` | — |
 
-### C. Catálogos Maestros
+### C. Cierre Semanal de Caja Chica (`/RC_SaldoSemanal/`)
+
+| Operación | Método | URL | Content-Type & Payload |
+| :--- | :--- | :--- | :--- |
+| **Listar Cierres (Paginado)** | `GET` | `/RC_SaldoSemanal/` | `?page=1&top=10&ordering=-fecha_fin` (Filtros: `codigo_cierre`, `fecha_inicio`, `fecha_fin`) |
+| **Obtener Cierre** | `GET` | `/RC_SaldoSemanal/<ID>/` | — |
+| **Cierre Atómico de Caja** | `POST` | `/RC_SaldoSemanal/` o `/RC_SaldoSemanal/cerrar-caja/` | `application/json` (Datos de saldo + campo `requerimientos`) |
+
+> [!TIP]
+> **Paginación e Infinite Scroll para Balance Semanal (`top=10`, máximo `top=1000`):**
+> - **Parámetro `top`:** Define la cantidad de registros por página (permite hasta un máximo de `top=1000`).
+> - **Estrategia Frontend para Balance Semanal:**
+>   1. **Carga Inicial:** Solicitar únicamente los primeros 10 registros con `GET /RC_SaldoSemanal/?page=1&top=10&ordering=-fecha_fin`.
+>   2. **Scroll Infinito:** Cuando el usuario scrollee hacia abajo y llegue al límite inferior de la lista/tabla, solicitar los 10 siguientes (usando la URL entregada en la propiedad `next` del JSON).
+>   3. **Concatenación:** Agregar los 10 registros nuevos al estado local (`prev => [...prev, ...nuevos]`).
+>   4. **Límite:** Detener las solicitudes cuando `next` sea `null`. Esto asegura tiempos de carga instantáneos y mínimo consumo de memoria en el navegador, ya que cada saldo semanal incluye sus requerimientos y comprobantes anidados.
+
+> [!NOTE]
+> **Serialización Completa de Requerimientos y Detalles:**
+> Al consultar `GET /RC_SaldoSemanal/` o `GET /RC_SaldoSemanal/<ID>/`, la respuesta incluye directamente el listado de todos los **`requerimientos`** asociados y, dentro de cada uno, el array de **`detalle`** de gasto con comprobantes, subgasto, entidades y montos. La respuesta paginada tiene la estructura DRF estándar (`count`, `next`, `previous`, `results`):
+> 
+> ```json
+> {
+>   "count": 45,
+>   "next": "https://appsurgicorperu.com/RC_SaldoSemanal/?page=2&top=10",
+>   "previous": null,
+>   "results": [
+>     {
+>       "id": 245,
+>       "codigo_cierre": "09OCT26-245",
+>       "fecha_inicio": "2026-10-02",
+>       "fecha_fin": "2026-10-09",
+>       "saldo_inicial": "4000.00",
+>       "total_gasto": "320.00",
+>       "saldo_final": "3680.00",
+>       "nuevo_ingreso": "320.00",
+>       "observaciones": "Cierre semanal semana 41",
+>       "cerrado_por": 15,
+>       "cerrado_por_nombre": "Juan Pérez",
+>       "total_requerimientos": 1,
+>       "requerimientos": [
+>         {
+>           "id": 1,
+>           "usuario_id": {
+>             "id": 12,
+>             "username": "mgarcia",
+>             "full_name": "Mario García"
+>           },
+>           "area_id": "Operaciones",
+>           "monto_solicitado": "320.00",
+>           "total_gastado": "320.00",
+>           "estado_requerimiento": { "CD": "Cerrado" },
+>           "saldo_semanal_id": 245,
+>           "codigo_cierre": "09OCT26-245",
+>           "detalle": [
+>             {
+>               "id": 101,
+>               "subgasto_id": { "id": 5, "nombre": "Taxi Operativo" },
+>               "costo": "45.00",
+>               "lima_provincia": "L",
+>               "origen_nombre": "Sede Central",
+>               "destino_nombre": "Hosp. Rebagliati",
+>               "adj_cajachica": "https://.../adj_cajachica/foto_101.jpg"
+>             }
+>           ]
+>         }
+>       ]
+>     }
+>   ]
+> }
+> ```
+
+### D. Catálogos Maestros
 
 | Endpoint | Método | Propósito | Parámetros Útiles |
 | :--- | :--- | :--- | :--- |
@@ -189,7 +261,24 @@ export interface RequerimientoCajaChicaItem {
   fecha_solicitud?: string;
   fecha_liquidacion?: string;
   created_by?: string; // Nombre completo del usuario creador (ej: "Juan Perez")
-  detalles?: RCDetalleItem[]; // Lista de detalles/comprobantes con su subgasto_id limpio
+  detalle?: RCDetalleItem[]; // Lista de detalles/comprobantes con su subgasto_id limpio
+}
+
+export interface SaldoSemanalItem {
+  id: number;
+  codigo_cierre: string;
+  fecha_inicio: string;
+  fecha_fin: string;
+  saldo_inicial: number | string;
+  total_gasto: number | string;
+  saldo_final: number | string;
+  nuevo_ingreso: number | string;
+  observaciones?: string;
+  cerrado_por?: number;
+  cerrado_por_nombre?: string;
+  total_requerimientos: number;
+  requerimientos: RequerimientoCajaChicaItem[]; // Requerimientos asociados con todos sus detalles de gasto
+  created_at: string;
 }
 ```
 
@@ -289,6 +378,19 @@ export const cajaChicaService = {
   getEntidades: async (search = '', top = 50): Promise<EntidadSedeItem[]> => {
     const response = await api.get('/RC_Entidades/', { params: { search, top } });
     return response.data.results || response.data;
+  },
+
+  // Saldos Semanales (Infinite Scroll con top=10)
+  getSaldosSemanales: async (page = 1, top = 10, search = '') => {
+    const response = await api.get('/RC_SaldoSemanal/', {
+      params: { page, top, search: search || undefined, ordering: '-fecha_fin' },
+    });
+    return response.data; // { count, next, previous, results: SaldoSemanalItem[] }
+  },
+
+  cerrarCajaSemanal: async (data: any) => {
+    const response = await api.post('/RC_SaldoSemanal/', data);
+    return response.data;
   },
 };
 ```
@@ -549,3 +651,80 @@ export const ModalRegistrarGasto: React.FC<Props> = ({
 
 3. **Bloqueo de Edición por Estado**:
    * Si el estado es `'LQ'` (Liquidado) o `'CD'` (Cerrado), deshabilitar el botón de *"Agregar Gasto"* o *"Eliminar Gasto"* para evitar errores `400 Bad Request`.
+
+4. **Scroll Infinito para Balance Semanal (`top=10`)**:
+   * Para optimizar la memoria y renderizado de la vista de saldos semanales (que incluye requerimientos y comprobantes anidados), cargar inicialmente 10 registros y consultar 10 más cuando el usuario scrollea hacia abajo al final del contenedor:
+     ```tsx
+     import React, { useState, useEffect, useRef, useCallback } from 'react';
+     import { cajaChicaService } from '../services/cajaChicaService';
+     import { SaldoSemanalItem } from '../types/cajaChica';
+
+     export const BalanceSemanalList = () => {
+       const [saldos, setSaldos] = useState<SaldoSemanalItem[]>([]);
+       const [page, setPage] = useState(1);
+       const [hasNext, setHasNext] = useState(true);
+       const [loading, setLoading] = useState(false);
+       const observerTarget = useRef<HTMLDivElement>(null);
+
+       const loadSaldos = useCallback(async (pageNum: number) => {
+         if (loading) return;
+         setLoading(true);
+         try {
+           // Solicitar exactamente 10 registros por bloque
+           const data = await cajaChicaService.getSaldosSemanales(pageNum, 10);
+           setSaldos(prev => (pageNum === 1 ? data.results : [...prev, ...data.results]));
+           setHasNext(Boolean(data.next));
+         } catch (error) {
+           console.error('Error al cargar balances semanales:', error);
+         } finally {
+           setLoading(false);
+         }
+       }, [loading]);
+
+       // Carga inicial (página 1, primeros 10 registros)
+       useEffect(() => {
+         loadSaldos(1);
+       }, []);
+
+       // Observer para detectar cuando el usuario scrollea al fondo
+       useEffect(() => {
+         const observer = new IntersectionObserver(
+           entries => {
+             if (entries[0].isIntersecting && hasNext && !loading) {
+               setPage(prevPage => {
+                 const nextPage = prevPage + 1;
+                 loadSaldos(nextPage);
+                 return nextPage;
+               });
+             }
+           },
+           { threshold: 1.0 }
+         );
+
+         if (observerTarget.current) {
+           observer.observe(observerTarget.current);
+         }
+         return () => observer.disconnect();
+       }, [hasNext, loading, loadSaldos]);
+
+       return (
+         <div className="balance-semanal-container">
+           <h2>Historial de Balances Semanales</h2>
+           {saldos.map(saldo => (
+             <div key={saldo.id} className="saldo-card">
+               <h3>{saldo.codigo_cierre} ({saldo.fecha_inicio} al {saldo.fecha_fin})</h3>
+               <p>Saldo Inicial: S/. {saldo.saldo_inicial} | Gasto: S/. {saldo.total_gasto}</p>
+               <p>Requerimientos cerrados: {saldo.total_requerimientos}</p>
+               {/* Requerimientos y detalles anidados listos para desplegar */}
+             </div>
+           ))}
+           {/* Centinela de Scroll Infinito */}
+           <div ref={observerTarget} className="scroll-sentinel">
+             {loading && <p>Cargando 10 registros más...</p>}
+             {!hasNext && saldos.length > 0 && <p>Has llegado al final de los registros.</p>}
+           </div>
+         </div>
+       );
+     };
+     ```
+

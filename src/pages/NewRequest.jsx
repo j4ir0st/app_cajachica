@@ -214,13 +214,17 @@ const NewRequest = () => {
     esModoEdicion ? mapearCabeceraExistente(requerimientoAEditar) : cabeceraInicial
   );
   const [detalles, setDetalles] = useState(
-    esModoEdicion ? mapearDetallesExistentes(requerimientoAEditar.detalles) : []
+    esModoEdicion
+      ? mapearDetallesExistentes(requerimientoAEditar?.detalle || requerimientoAEditar?.detalles)
+      : []
   );
   const [enviando, setEnviando] = useState(false);
 
   // Registro de detalles originales y eliminados para sincronización
   const detallesOriginalesRef = useRef(
-    esModoEdicion ? mapearDetallesExistentes(requerimientoAEditar.detalles) : []
+    esModoEdicion
+      ? mapearDetallesExistentes(requerimientoAEditar?.detalle || requerimientoAEditar?.detalles)
+      : []
   );
   const [idsEliminados, setIdsEliminados] = useState([]);
 
