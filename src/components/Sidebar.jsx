@@ -23,8 +23,9 @@ const Sidebar = () => {
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const { user } = useUserStore();
-  const apiUrl = import.meta.env.DEV ? '/' : import.meta.env.VITE_API_URL;
-  const logoUrl = `${apiUrl}${import.meta.env.VITE_SURGI_LOGO}`;
+  const apiUrl = import.meta.env.DEV ? '' : (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
+  const logoPath = (import.meta.env.VITE_SURGI_LOGO).replace(/^\//, '');
+  const logoUrl = apiUrl ? `${apiUrl}/${logoPath}` : `/${logoPath}`;
 
   const menuItems = [
     {

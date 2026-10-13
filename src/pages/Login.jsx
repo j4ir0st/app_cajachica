@@ -16,6 +16,12 @@ const Login = () => {
   const { login } = useUserStore();
   const navigate = useNavigate();
 
+  // En desarrollo (DEV), usamos cadena vacía para que el proxy de Vite capture la petición y evite CORS.
+  // En producción, usamos la URL base configurada o la ruta relativa del servidor oficial.
+  const apiUrl = import.meta.env.DEV ? '' : (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
+  const logoPath = (import.meta.env.VITE_SURGI_LOGO || 'NewAPI/static/avatars/LogoSurgiC_SinFondo.png').replace(/^\//, '');
+  const logoUrl = apiUrl ? `${apiUrl}/${logoPath}` : `/${logoPath}`;
+
   const handleLogin = async (e) => {
     e.preventDefault();
     setIsLoading(true);
@@ -23,7 +29,8 @@ const Login = () => {
 
     try {
       // 1. Obtener Token JWT y Datos de Usuario en una sola consulta
-      const tokenRes = await axios.post(`${apiUrl}api/token/`, {
+      const tokenEndpoint = apiUrl ? `${apiUrl}/api/token/` : '/api/token/';
+      const tokenRes = await axios.post(tokenEndpoint, {
         username: formData.usuario,
         password: formData.password
       });
@@ -66,11 +73,6 @@ const Login = () => {
   };
 
   const currentYear = new Date().getFullYear();
-
-  // En desarrollo (DEV), usamos '/' para que el proxy de Vite capture la petición y evite CORS.
-  // En producción, usamos la URL definida en el .env (aunque si es el mismo servidor, '/' también funcionaría).
-  const apiUrl = import.meta.env.DEV ? '/' : import.meta.env.VITE_API_URL;
-  const logoUrl = `${apiUrl}${import.meta.env.VITE_SURGI_LOGO}`;
 
   return (
     <div className="min-h-screen w-full flex items-center justify-center relative overflow-hidden bg-brand-dark font-outfit">

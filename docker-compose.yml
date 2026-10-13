@@ -14,4 +14,8 @@ services:
     restart: unless-stopped
     environment:
       - TZ=America/Lima
+      - VITE_API_URL=${VITE_API_URL:-https://appsurgicorperu.com/}
+      - VITE_SURGI_LOGO=${VITE_SURGI_LOGO:-NewAPI/static/avatars/LogoSurgiC_SinFondo.png}
+    env_file:
+      - .env
     container_name: surgicorp-cajachica
