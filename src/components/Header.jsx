@@ -12,6 +12,7 @@ const Header = () => {
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [cacheLimpiado, setCacheLimpiado] = useState(false);
   const [recargandoLiquidaciones, setRecargandoLiquidaciones] = useState(false);
+  const [busquedaHeader, setBusquedaHeader] = useState('');
   const { user, logout } = useUserStore();
   const { cargarCatalogos } = useCatalogoStore();
   const navigate = useNavigate();
@@ -19,6 +20,17 @@ const Header = () => {
   const handleLogout = () => {
     logout();
     navigate('/login');
+  };
+
+  // Ejecuta la búsqueda global redirigiendo al listado de solicitudes
+  const ejecutarBusqueda = (e) => {
+    if (e) e.preventDefault();
+    const query = busquedaHeader.trim();
+    if (query) {
+      navigate(`/mis-solicitudes?buscar=${encodeURIComponent(query)}`);
+    } else {
+      navigate('/mis-solicitudes');
+    }
   };
 
   // Limpia todos los catálogos guardados en memoria y fuerza la recarga desde la API (al pulsar título)
@@ -68,25 +80,30 @@ const Header = () => {
           )}
         </div>
 
-        <div className="hidden lg:flex items-center bg-brand-light border border-gray-100 rounded-2xl px-4 py-2 w-80 group focus-within:ring-2 focus-within:ring-brand-primary/10 focus-within:border-brand-primary transition-premium">
-          <Search size={18} className="text-gray-400 group-focus-within:text-brand-primary transition-premium" />
+        <form onSubmit={ejecutarBusqueda} className="hidden lg:flex items-center bg-brand-light border border-gray-100 rounded-2xl px-4 py-2 w-80 group focus-within:ring-2 focus-within:ring-brand-primary/10 focus-within:border-brand-primary transition-premium">
+          <button type="submit" title="Buscar" className="text-gray-400 group-focus-within:text-brand-primary hover:text-brand-primary transition-premium">
+            <Search size={18} />
+          </button>
           <input
             type="text"
+            value={busquedaHeader}
+            onChange={(e) => setBusquedaHeader(e.target.value)}
             placeholder="Buscar solicitudes o comprobantes..."
             className="bg-transparent border-none outline-none px-3 text-sm text-gray-700 w-full placeholder:text-gray-400 font-medium"
           />
-        </div>
+        </form>
       </div>
 
       {/* Acciones e Info de Usuario */}
       <div className="flex items-center gap-3 sm:gap-6">
-        {/* Botón Nueva Rendición */}
+        {/* Botón Nueva Rendición Destacado */}
         <button
           onClick={() => navigate('/nueva-solicitud')}
-          title="Nueva Rendición"
-          className="relative p-2 text-gray-400 hover:text-brand-primary hover:bg-brand-light rounded-2xl transition-premium group"
+          title="Crear Nueva Rendición"
+          className="flex items-center gap-1.5 sm:gap-2 bg-gradient-to-r from-brand-primary to-brand-secondary text-white font-black text-xs px-3 py-2 sm:px-4 sm:py-2.5 rounded-xl sm:rounded-2xl shadow-md shadow-brand-primary/25 hover:shadow-lg hover:shadow-brand-primary/35 hover:scale-105 active:scale-95 transition-all group"
         >
-          <PlusCircle size={22} />
+          <PlusCircle size={18} className="transition-transform group-hover:rotate-90 duration-300" />
+          <span className="hidden sm:inline tracking-wider">NUEVA RENDICIÓN</span>
         </button>
 
         {/* Botón de Actualizar Liquidaciones (Exclusivo para vista móvil) */}

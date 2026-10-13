@@ -22,6 +22,7 @@ import {
 import { useUserStore } from '../../store/userStore';
 import { useCatalogoStore } from '../../store/catalogoStore';
 import { fetchAuth } from '../../utils/fetchAuth';
+import { obtenerTipoCaja, LISTA_EMPRESAS } from '../../utils/tipoCaja';
 
 const API_URL = import.meta.env.DEV ? '' : (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
 
@@ -48,6 +49,7 @@ const obtenerDetalleVacio = () => ({
   subgasto_obj: null,
   lima_provincia: 'L',
   provincia_url: null,
+  empresa_id: null,
   nro_factura: '',
   nro_ruc: '',
   placa: '',
@@ -132,7 +134,11 @@ const coincidenUrlsOIds = (url1, url2) => {
  */
 const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLimite }) => {
   const { user } = useUserStore();
-  const { tiposGasto, subgastos, entidades, provincias, cargando, error: errorCatalogo, cargarCatalogos } = useCatalogoStore();
+  const { tiposGasto, subgastos, entidades, provincias, empresas, cargando, error: errorCatalogo, cargarCatalogos } = useCatalogoStore();
+
+  const listaEmpresasDisponibles = useMemo(() => {
+    return Array.isArray(empresas) && empresas.length > 0 ? empresas : LISTA_EMPRESAS;
+  }, [empresas]);
 
   const [formulario, setFormulario] = useState(obtenerDetalleVacio());
   const [pasoWizard, setPasoWizard] = useState(1);
@@ -592,6 +598,16 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
                     {det.lima_provincia === 'L' ? 'Lima' : `Provincia (${prov?.nombre || '—'})`}
                   </span>
 
+                  {/* Badge de Tipo de Caja del comprobante */}
+                  {(() => {
+                    const tipoDet = obtenerTipoCaja(det);
+                    return (
+                      <span className={`px-2 py-0.5 rounded-md font-black text-[10px] uppercase border ${tipoDet.claseBadge}`}>
+                        {tipoDet.etiqueta} {tipoDet.nombreEmpresa !== 'Sin Factura' ? `• ${tipoDet.nombreEmpresa}` : ''}
+                      </span>
+                    );
+                  })()}
+
                   {det.nro_factura && (
                     <span className="px-2 py-0.5 bg-gray-50 text-gray-600 rounded-md font-semibold flex items-center gap-1">
                       <Receipt size={11} className="text-brand-primary" />
@@ -892,13 +908,49 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
                     </div>
                   ) : null}
 
-                  {/* Comprobante Fiscal (RUC y Factura/Boleta) */}
+                  {/* Comprobante Fiscal (Empresa Destino, RUC y Factura/Boleta) */}
                   {subgastoActivo?.requiere_comprobante && (
                     <div className="space-y-3 bg-gray-50/80 p-4 rounded-2xl border border-gray-100">
-                      <span className="text-[10px] font-black uppercase tracking-wider text-brand-dark flex items-center gap-1.5">
-                        <Receipt size={14} className="text-brand-primary" />
-                        Comprobante Fiscal Electrónico
-                      </span>
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-black uppercase tracking-wider text-brand-dark flex items-center gap-1.5">
+                          <Receipt size={14} className="text-brand-primary" />
+                          Comprobante Fiscal Electrónico
+                        </span>
+                        {(() => {
+                          const tipoInfo = obtenerTipoCaja(formulario.empresa_id);
+                          return (
+                            <span className={`text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded-lg border ${tipoInfo.claseBadge}`}>
+                              {tipoInfo.etiqueta}
+                            </span>
+                          );
+                        })()}
+                      </div>
+
+                      {/* Selector de Factura a Nombre De */}
+                      <div>
+                        <label className="block text-xs font-bold text-gray-500 mb-1 uppercase tracking-wider">
+                          Factura a Nombre De:
+                        </label>
+                        <div className="relative">
+                          <select
+                            value={formulario.empresa_id || ''}
+                            onChange={(e) => {
+                              const val = e.target.value ? parseInt(e.target.value, 10) : null;
+                              manejarCambio('empresa_id', val);
+                            }}
+                            className="w-full appearance-none bg-white border-2 border-gray-100 focus:border-brand-primary rounded-xl px-4 py-2.5 text-xs font-semibold text-brand-dark outline-none transition-colors"
+                          >
+                            <option value="">Sin Factura / No requiere factura (Tipo C)</option>
+                            {listaEmpresasDisponibles.map((emp) => (
+                              <option key={emp.id} value={emp.id}>
+                                {emp.nombre} {emp.tipo ? `(Tipo ${emp.tipo})` : ''}
+                              </option>
+                            ))}
+                          </select>
+                          <ChevronDown size={14} className="absolute right-3.5 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
+                        </div>
+                      </div>
+
                       <div>
                         <label className="block text-xs font-bold text-gray-500 mb-1 uppercase tracking-wider">N° RUC *</label>
                         <input

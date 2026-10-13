@@ -10,6 +10,7 @@ export const useCatalogoStore = create((set, get) => ({
   subgastos: [],
   entidades: [],
   provincias: [],
+  empresas: [],
   cargando: false,
   error: null,
 
@@ -23,39 +24,57 @@ export const useCatalogoStore = create((set, get) => ({
     /**
      * Resuelve un catálogo individual usando caché o API.
      */
-    const resuelveCatalogo = async (clave, url) => {
+    const resuelveCatalogo = async (clave, url, datosRespaldo = null) => {
       if (!forzarRecarga) {
         const enCache = leerDeCache(clave);
         if (enCache) return enCache;
       }
 
-      const res = await fetchAuth(url);
-      if (!res.ok) throw new Error(`Error ${res.status} al cargar ${clave}`);
+      try {
+        const res = await fetchAuth(url);
+        if (!res.ok) {
+          if (datosRespaldo) return datosRespaldo;
+          throw new Error(`Error ${res.status} al cargar ${clave}`);
+        }
 
-      const json = await res.json();
-      const data = json.results ?? json;
+        const json = await res.json();
+        const data = json.results ?? json;
 
-      if (!Array.isArray(data)) throw new Error(`Respuesta inesperada para ${clave}`);
+        if (!Array.isArray(data)) {
+          if (datosRespaldo) return datosRespaldo;
+          throw new Error(`Respuesta inesperada para ${clave}`);
+        }
 
-      guardarEnCache(clave, data);
-      return data;
+        guardarEnCache(clave, data);
+        return data;
+      } catch (errCat) {
+        if (datosRespaldo) return datosRespaldo;
+        throw errCat;
+      }
     };
 
     try {
-      const [tiposData, subData, entData, provData] = await Promise.all([
+      const [tiposData, subData, entData, provData, emprData] = await Promise.all([
         resuelveCatalogo(CLAVES_CATALOGO.tiposGasto, `${API_URL}/RC_TipoGasto/?format=json`),
         resuelveCatalogo(CLAVES_CATALOGO.subgastos, `${API_URL}/RC_SubGasto/?format=json`),
         resuelveCatalogo(CLAVES_CATALOGO.entidades, `${API_URL}/RC_Entidades/?format=json`),
         resuelveCatalogo(CLAVES_CATALOGO.provincias, `${API_URL}/RC_Provincia/?format=json&top=200`),
+        resuelveCatalogo(CLAVES_CATALOGO.empresas, `${API_URL}/SI_Empresas/?format=json`, [
+          { id: 1, nombre: 'Surgicorp SRL' },
+          { id: 4, nombre: 'RR MEDICAL SRL' },
+          { id: 3, nombre: 'MCKINSEY MEDICA S.R.L.' },
+          { id: 2, nombre: 'BIOPRO PERU S.R.L.' },
+        ]),
       ]);
 
-      console.log(`[Catálogos] ✅ Tablas maestras cargadas: Tipos (${tiposData.length}), Subgastos (${subData.length}), Entidades (${entData.length}), Provincias (${provData.length}).`);
+      console.log(`[Catálogos] ✅ Tablas maestras cargadas: Tipos (${tiposData.length}), Subgastos (${subData.length}), Entidades (${entData.length}), Provincias (${provData.length}), Empresas (${emprData.length}).`);
 
       set({
         tiposGasto: tiposData,
         subgastos: subData,
         entidades: entData,
         provincias: provData,
+        empresas: emprData,
         cargando: false
       });
     } catch (err) {
@@ -74,6 +93,7 @@ export const useCatalogoStore = create((set, get) => ({
     subgastos: [],
     entidades: [],
     provincias: [],
+    empresas: [],
     error: null
   }),
 }));

@@ -101,19 +101,22 @@ const Sidebar = () => {
       </div>
 
       {/* Nav Menu */}
-      <nav className="flex-1 px-4 space-y-2 overflow-y-auto pt-4 scrollbar-hide">
+      <nav className={`flex-1 ${collapsed ? 'px-2' : 'px-4'} space-y-2 overflow-y-auto pt-4 scrollbar-hide`}>
         {filteredItems.map((item) => (
           <NavLink
             key={item.path}
             to={item.path}
+            onClick={() => {
+              // En celular, si no está colapsado y hace clic, se puede cerrar o mantener
+            }}
             className={({ isActive }) => `
-              flex items-center gap-4 px-4 py-3.5 rounded-2xl transition-premium group relative
+              flex items-center ${collapsed ? 'justify-center px-0' : 'gap-4 px-4'} py-3.5 rounded-2xl transition-premium group relative
               ${isActive
                 ? 'bg-gradient-to-r from-brand-primary to-brand-primary/60 text-white shadow-lg shadow-brand-primary/20'
                 : 'text-white/50 hover:text-white hover:bg-white/5'}
             `}
           >
-            <item.icon size={collapsed ? 24 : 20} className={`shrink-0 transition-premium group-hover:scale-110`} />
+            <item.icon size={collapsed ? 22 : 20} className={`shrink-0 transition-premium group-hover:scale-110`} />
             {!collapsed && (
               <span className="font-bold text-sm tracking-wide transition-premium">
                 {item.title}
@@ -164,7 +167,7 @@ const Sidebar = () => {
       {mobileOpen && (
         <div className="fixed inset-0 z-[60] md:hidden">
           <div className="absolute inset-0 bg-brand-dark/80 backdrop-blur-sm" onClick={() => setMobileOpen(false)} />
-          <aside className="absolute inset-y-0 left-0 w-72 bg-brand-dark shadow-2xl animate-in slide-in-from-left duration-300">
+          <aside className={`absolute inset-y-0 left-0 transition-all duration-300 ${collapsed ? 'w-20' : 'w-72'} bg-brand-dark shadow-2xl animate-in slide-in-from-left`}>
             <SidebarContent />
           </aside>
         </div>

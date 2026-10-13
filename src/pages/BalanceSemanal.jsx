@@ -8,6 +8,7 @@ import {
   RefreshCw,
   Printer,
   FileText,
+  FileSpreadsheet,
   CheckCircle2,
   ChevronRight,
   TrendingDown,
@@ -26,9 +27,12 @@ import {
 } from 'lucide-react';
 import { useUserStore } from '../store/userStore';
 import { fetchAuth, extraerMensajeError } from '../utils/fetchAuth';
+import { obtenerTipoCaja, resolverClaveTipoIndividual } from '../utils/tipoCaja';
 import Toast from '../components/Toast';
 
 const API_URL = import.meta.env.DEV ? '' : (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
+const LOGO_PATH = (import.meta.env.VITE_SURGI_LOGO || '').replace(/^\//, '');
+const LOGO_URL = API_URL ? `${API_URL}/${LOGO_PATH}` : `/${LOGO_PATH}`;
 
 // ============================================================================
 // FUNCIONES AUXILIARES DE FORMATEO
@@ -348,12 +352,220 @@ const BalanceSemanal = () => {
       .sort((a, b) => b.monto - a.monto);
   }, [requerimientosSemana]);
 
+  // Desglose multi-tabla por solicitante para el reporte
+  const reportePorSolicitante = useMemo(() => {
+    if (!requerimientosSemana || requerimientosSemana.length === 0) return [];
+
+    const grupos = {};
+
+    requerimientosSemana.forEach((req) => {
+      const idUsuario = typeof req.usuario_id === 'object' ? req.usuario_id?.id : req.usuario_id;
+      const nombreUsuario = obtenerNombreSolicitante(req.usuario_id);
+      const clave = String(idUsuario || nombreUsuario);
+
+      if (!grupos[clave]) {
+        grupos[clave] = {
+          idUsuario,
+          nombre: nombreUsuario,
+          cantidadSolicitudes: 0,
+          totalLiquidado: 0,
+          totalGastado: 0,
+          gastos: [],
+        };
+      }
+
+      grupos[clave].cantidadSolicitudes += 1;
+      const gastadoReq = parseFloat(req.total_gastado || req.monto_solicitado || 0);
+      grupos[clave].totalGastado += gastadoReq;
+      grupos[clave].totalLiquidado += gastadoReq;
+
+      const listaDet = req.detalle || req.detalles || [];
+      if (listaDet.length > 0) {
+        listaDet.forEach((det) => {
+          const tipoCajaDet = resolverClaveTipoIndividual(det);
+          grupos[clave].gastos.push({
+            reqId: req.id,
+            fecha: req.fecha_solicitud,
+            tipoCaja: tipoCajaDet,
+            subgasto: det.subgasto_id?.nombre || (typeof det.subgasto_id === 'string' ? det.subgasto_id : 'Gasto general'),
+            categoria: det.subgasto_id?.tipogasto_id?.nombre || '',
+            nroFactura: det.nro_factura || det.detalle || 'Comprobante',
+            nroRuc: det.nro_ruc || '—',
+            costo: parseFloat(det.costo || 0),
+          });
+        });
+      } else {
+        grupos[clave].gastos.push({
+          reqId: req.id,
+          fecha: req.fecha_solicitud,
+          tipoCaja: obtenerTipoCaja(req).etiqueta.replace('TIPO: ', ''),
+          subgasto: req.obs || 'Rendición de gastos',
+          categoria: 'General',
+          nroFactura: `Req #${req.id}`,
+          nroRuc: '—',
+          costo: gastadoReq,
+        });
+      }
+    });
+
+    return Object.values(grupos).sort((a, b) => a.nombre.localeCompare(b.nombre));
+  }, [requerimientosSemana]);
+
   // ============================================================================
-  // IMPRESIÓN DEL REPORTE EN PDF
+  // EXPORTACIÓN E IMPRESIÓN AISLADA DEL DOCUMENTO
   // ============================================================================
 
-  const manejarImprimirReporte = () => {
-    window.print();
+  // Imprime exclusivamente la hoja de reporte dentro de un iframe aislado
+  const manejarImprimirSoloDocumento = () => {
+    const contenedor = document.getElementById('hoja-reporte-imprimible');
+    if (!contenedor) return;
+
+    const iframe = document.createElement('iframe');
+    iframe.style.position = 'fixed';
+    iframe.style.right = '0';
+    iframe.style.bottom = '0';
+    iframe.style.width = '0';
+    iframe.style.height = '0';
+    iframe.style.border = '0';
+    document.body.appendChild(iframe);
+
+    const doc = iframe.contentWindow.document;
+    doc.open();
+    doc.write(`
+      <!DOCTYPE html>
+      <html lang="es">
+        <head>
+          <meta charset="utf-8" />
+          <title>Reporte_Semanal_${semanaSeleccionada?.codigo_cierre || 'CajaChica'}</title>
+          <style>
+            @page {
+              size: A4 portrait;
+              margin: 10mm 8mm;
+            }
+            * {
+              box-sizing: border-box;
+              -webkit-print-color-adjust: exact !important;
+              print-color-adjust: exact !important;
+            }
+            body {
+              font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+              color: #0f172a;
+              margin: 0;
+              padding: 0;
+              background: #fff;
+              font-size: 11px;
+            }
+            table {
+              width: 100%;
+              border-collapse: collapse;
+              font-size: 10px;
+            }
+            th, td {
+              border: 1px solid #cbd5e1;
+              padding: 4px 6px;
+            }
+            th {
+              background-color: #f1f5f9;
+              font-weight: 700;
+            }
+            .seccion-solicitante {
+              page-break-inside: avoid !important;
+              break-inside: avoid !important;
+              margin-bottom: 14px;
+              border: 1px solid #cbd5e1;
+              border-radius: 6px;
+              overflow: hidden;
+            }
+            .cabecera-solicitante {
+              background-color: #f8fafc;
+              padding: 6px 8px;
+              font-weight: bold;
+              display: flex;
+              justify-content: space-between;
+              border-bottom: 1px solid #cbd5e1;
+            }
+          </style>
+        </head>
+        <body>
+          ${contenedor.innerHTML}
+        </body>
+      </html>
+    `);
+    doc.close();
+
+    setTimeout(() => {
+      iframe.contentWindow.focus();
+      iframe.contentWindow.print();
+      setTimeout(() => {
+        if (document.body.contains(iframe)) {
+          document.body.removeChild(iframe);
+        }
+      }, 1500);
+    }, 450);
+  };
+
+  // Guardar PDF utilizando la ventana de impresión A4 con título asignado
+  const manejarGuardarPDF = () => {
+    manejarImprimirSoloDocumento();
+  };
+
+  // Exportar el desglose semanal en formato Excel CSV compatible
+  const manejarDescargarExcel = () => {
+    if (!semanaSeleccionada) return;
+
+    const filas = [];
+    filas.push(['REPORTE SEMANAL DE CAJA CHICA']);
+    filas.push(['Código de Cierre:', semanaSeleccionada.codigo_cierre]);
+    filas.push(['Período:', `${formatearFechaCorta(semanaSeleccionada.fecha_inicio)} al ${formatearFechaCorta(semanaSeleccionada.fecha_fin)}`]);
+    filas.push(['Saldo Inicial (S/):', saldoInicialVal.toFixed(2)]);
+    filas.push(['Total Gastado (S/):', totalGastoVal.toFixed(2)]);
+    filas.push(['Saldo Final (S/):', saldoFinalVal.toFixed(2)]);
+    filas.push(['Reposición de Fondo (S/):', nuevoIngresoVal.toFixed(2)]);
+    filas.push([]);
+
+    reportePorSolicitante.forEach((sol) => {
+      filas.push([`SOLICITANTE: ${sol.nombre}`]);
+      filas.push([
+        `Total Liquidado: S/ ${sol.totalLiquidado.toFixed(2)}`,
+        `Total Gastado: S/ ${sol.totalGastado.toFixed(2)}`,
+        `Cant. Solicitudes: ${sol.cantidadSolicitudes}`
+      ]);
+      filas.push(['# Req', 'Fecha', 'Tipo Caja', 'Categoría', 'Concepto / Subgasto', 'N° Factura / Doc', 'RUC', 'Importe S/']);
+      sol.gastos.forEach((g) => {
+        filas.push([
+          `#${g.reqId}`,
+          g.fecha || '',
+          `Tipo ${g.tipoCaja}`,
+          g.categoria || '',
+          g.subgasto || '',
+          g.nroFactura || '',
+          g.nroRuc || '',
+          g.costo.toFixed(2)
+        ]);
+      });
+      filas.push(['', '', '', '', '', '', 'TOTAL SOLICITANTE:', sol.totalGastado.toFixed(2)]);
+      filas.push([]);
+    });
+
+    filas.push(['TOTAL GENERAL SEMANA (S/):', '', '', '', '', '', '', totalGastoVal.toFixed(2)]);
+
+    const csvContenido = filas
+      .map((fila) =>
+        fila
+          .map((c) => `"${String(c ?? '').replace(/"/g, '""')}"`)
+          .join(';')
+      )
+      .join('\r\n');
+
+    const blob = new Blob(['\uFEFF' + csvContenido], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `Reporte_Semanal_${semanaSeleccionada.codigo_cierre || 'Cierre'}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
   // ============================================================================
@@ -400,10 +612,11 @@ const BalanceSemanal = () => {
           {semanaSeleccionada && (
             <button
               onClick={() => setMostrarModalReporte(true)}
-              className="flex items-center gap-1.5 px-3.5 py-2 rounded-2xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white text-xs font-black shadow-md shadow-blue-500/20 hover:scale-[1.02] active:scale-[0.98] transition-all"
+              className="flex items-center gap-2 px-3 py-2 sm:px-4 sm:py-2 rounded-2xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white text-xs font-black shadow-md shadow-blue-500/20 hover:scale-[1.02] active:scale-[0.98] transition-all"
+              title="Reporte Semanal"
             >
-              <Printer size={15} />
-              <span>Reporte Semanal PDF</span>
+              <Printer className="w-5 h-5 sm:w-4 sm:h-4 shrink-0" />
+              <span className="tracking-wide">Reporte Semanal</span>
             </button>
           )}
         </div>
@@ -644,15 +857,19 @@ const BalanceSemanal = () => {
                       const nombreSolicitante = obtenerNombreSolicitante(req.usuario_id);
                       const listaDet = req.detalle || req.detalles || [];
                       const numComprobantes = listaDet.length;
+                      const tipoCajaInfo = obtenerTipoCaja(req);
 
                       return (
                         <div
                           key={req.id}
                           className="p-3 bg-gray-50/70 hover:bg-gray-50 rounded-xl border border-gray-100 flex items-center justify-between gap-3 transition-all"
                         >
-                          <div className="flex items-center gap-3">
-                            <span className="text-xs font-black text-brand-dark bg-white border border-gray-200 px-2 py-1 rounded-lg">
+                          <div className="flex items-center gap-2.5 sm:gap-3">
+                            <span className="text-xs font-black text-brand-dark bg-white border border-gray-200 px-2 py-1 rounded-lg shrink-0">
                               #{req.id}
+                            </span>
+                            <span className={`text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded-lg border shrink-0 ${tipoCajaInfo.claseBadge}`}>
+                              {tipoCajaInfo.etiqueta}
                             </span>
                             <div>
                               <h4 className="text-xs font-black text-brand-dark leading-tight">{nombreSolicitante}</h4>
@@ -708,26 +925,54 @@ const BalanceSemanal = () => {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-brand-dark/80 backdrop-blur-sm p-2 sm:p-4 overflow-y-auto">
           <div className="bg-white rounded-3xl w-full max-w-4xl shadow-2xl border border-gray-100 flex flex-col max-h-[96vh] overflow-hidden animate-scale-up">
             {/* Cabecera del Modal de Reporte */}
-            <div className="px-5 py-3.5 bg-brand-dark text-white flex items-center justify-between shrink-0">
+            <div className="px-5 py-3.5 bg-brand-dark text-white flex flex-wrap items-center justify-between gap-3 shrink-0">
               <div className="flex items-center gap-2">
                 <FileText size={18} className="text-brand-accent" />
                 <h3 className="text-sm font-black tracking-wide">
-                  Reporte Semanal de Caja Chica — {semanaSeleccionada.codigo_cierre}
+                  Reporte Semanal — {semanaSeleccionada.codigo_cierre}
                 </h3>
               </div>
+
+              {/* Botones de Acción Solicitados */}
               <div className="flex items-center gap-2">
+                {/* Botón 1: Imprimir Documento Aislado */}
                 <button
                   type="button"
-                  onClick={manejarImprimirReporte}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-brand-primary hover:bg-brand-secondary text-white text-xs font-black shadow-md transition-all"
+                  onClick={manejarImprimirSoloDocumento}
+                  title="Imprimir solo el documento"
+                  className="p-2 sm:px-3 sm:py-1.5 rounded-xl bg-brand-primary hover:bg-brand-secondary text-white text-xs font-black shadow-md transition-all flex items-center gap-1.5"
                 >
-                  <Printer size={14} />
-                  <span>Imprimir / Guardar PDF</span>
+                  <Printer size={16} />
+                  <span className="hidden sm:inline">Imprimir</span>
                 </button>
+
+                {/* Botón 2: Guardar PDF */}
+                <button
+                  type="button"
+                  onClick={manejarGuardarPDF}
+                  title="Guardar como archivo PDF"
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-black shadow-md transition-all"
+                >
+                  <Download size={14} />
+                  <span>Guardar PDF</span>
+                </button>
+
+                {/* Botón 3: Descargar en Excel */}
+                <button
+                  type="button"
+                  onClick={manejarDescargarExcel}
+                  title="Descargar datos en formato Excel (.csv)"
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black shadow-md transition-all"
+                >
+                  <FileSpreadsheet size={14} />
+                  <span>Descargar en Excel</span>
+                </button>
+
+                {/* Cerrar Modal */}
                 <button
                   type="button"
                   onClick={() => setMostrarModalReporte(false)}
-                  className="p-1.5 rounded-xl text-white/60 hover:text-white hover:bg-white/10 transition-colors"
+                  className="p-1.5 rounded-xl text-white/60 hover:text-white hover:bg-white/10 transition-colors ml-1"
                 >
                   <X size={18} />
                 </button>
@@ -736,18 +981,26 @@ const BalanceSemanal = () => {
 
             {/* Hoja Imprimible Oficial (Estilo A4 Corporativo) */}
             <div className="p-6 sm:p-8 overflow-y-auto bg-white font-sans text-brand-dark print:p-0 space-y-6" id="hoja-reporte-imprimible">
-              {/* Encabezado Corporativo Surgicorp */}
+              {/* Encabezado Corporativo Surgicorp con Logo Original */}
               <div className="flex items-start justify-between border-b-2 border-brand-dark pb-4">
-                <div>
-                  <h2 className="text-xl font-black text-brand-dark tracking-tighter">
-                    SURGICORP <span className="text-brand-primary">PERÚ</span>
-                  </h2>
-                  <p className="text-[10px] text-gray-500 font-bold uppercase tracking-widest mt-0.5">
-                    Surgery for Life • Control de Gastos de Caja Chica
-                  </p>
+                <div className="flex items-center gap-3">
+                  <img
+                    src={LOGO_URL}
+                    alt="Surgicorp Logo"
+                    className="h-12 w-auto object-contain"
+                  />
+                  <div className="border-l border-gray-300 pl-3">
+                    <h2 className="text-xl font-black text-brand-dark tracking-tighter uppercase leading-none">
+                      CAJA <span className="text-brand-primary">CHICA</span>
+                    </h2>
+                    <p className="text-[10px] text-gray-500 font-bold uppercase tracking-widest mt-1">
+                      Control de Gastos de Caja Chica
+                    </p>
+                  </div>
                 </div>
+
                 <div className="text-right">
-                  <span className="text-xs font-black bg-brand-light px-2.5 py-1 rounded-lg border border-brand-primary/20 inline-block mb-1">
+                  <span className="text-xs font-black bg-brand-light px-2.5 py-1 rounded-lg border border-brand-primary/20 inline-block mb-1 font-mono">
                     {semanaSeleccionada.codigo_cierre}
                   </span>
                   <p className="text-[11px] text-gray-500 font-medium">
@@ -776,65 +1029,106 @@ const BalanceSemanal = () => {
                 </div>
               </div>
 
-              {/* Tabla de Rendiciones de la Semana */}
-              <div className="space-y-2">
-                <h4 className="text-xs font-black uppercase tracking-wider text-brand-dark">
-                  Detalle de Solicitudes y Comprobantes
-                </h4>
-
-                <table className="w-full text-left text-xs border-collapse border border-gray-200">
-                  <thead>
-                    <tr className="bg-gray-100 text-gray-700 font-bold">
-                      <th className="p-2 border border-gray-200">ID</th>
-                      <th className="p-2 border border-gray-200">Solicitante</th>
-                      <th className="p-2 border border-gray-200">Fecha</th>
-                      <th className="p-2 border border-gray-200">Conceptos / Comprobantes</th>
-                      <th className="p-2 border border-gray-200 text-right">Importe</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {requerimientosSemana.map((r) => (
-                      <tr key={r.id} className="border-b border-gray-200 hover:bg-gray-50">
-                        <td className="p-2 font-black border border-gray-200">#{r.id}</td>
-                        <td className="p-2 font-semibold border border-gray-200">{obtenerNombreSolicitante(r.usuario_id)}</td>
-                        <td className="p-2 text-gray-500 border border-gray-200">{formatearFechaCorta(r.fecha_solicitud)}</td>
-                        <td className="p-2 border border-gray-200 text-[11px]">
-                          {(r.detalle || r.detalles || []).map((d, i) => (
-                            <div key={i} className="text-gray-600">
-                              • {d.subgasto_id?.nombre || (typeof d.subgasto_id === 'string' ? d.subgasto_id : 'Gasto')} {d.nro_factura ? `(Doc: ${d.nro_factura})` : ''} - S/ {parseFloat(d.costo || 0).toFixed(2)}
-                            </div>
-                          ))}
-                        </td>
-                        <td className="p-2 font-black text-right border border-gray-200">
-                          S/ {parseFloat(r.total_gastado || r.monto_solicitado || 0).toFixed(2)}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                  <tfoot>
-                    <tr className="bg-gray-50 font-black text-xs">
-                      <td colSpan={4} className="p-2 text-right uppercase border border-gray-200">Total Liquidado en Semana:</td>
-                      <td className="p-2 text-right text-brand-primary border border-gray-200 text-sm">
-                        S/ {totalGastoVal.toFixed(2)}
-                      </td>
-                    </tr>
-                  </tfoot>
-                </table>
-              </div>
-
-              {/* Bloque de Firmas de Aprobación */}
-              <div className="grid grid-cols-3 gap-8 pt-12 text-center text-xs">
-                <div className="border-t border-gray-400 pt-2">
-                  <span className="font-bold block">Responsable de Caja Chica</span>
-                  <span className="text-[10px] text-gray-400">Emisión y Arqueo</span>
+              {/* Multi-Tablas de Rendición por cada Solicitante (Formato A4 sin cortes) */}
+              <div className="space-y-5">
+                <div className="flex items-center justify-between border-b border-gray-200 pb-1">
+                  <h3 className="text-xs font-black uppercase tracking-wider text-brand-dark">
+                    Liquidaciones por Solicitante ({reportePorSolicitante.length})
+                  </h3>
+                  <span className="text-[11px] text-gray-500 font-medium">
+                    Formato A4 • Sin cortes por solicitante
+                  </span>
                 </div>
-                <div className="border-t border-gray-400 pt-2">
-                  <span className="font-bold block">Gerencia de Operaciones</span>
-                  <span className="text-[10px] text-gray-400">Visto Bueno y Cierre</span>
-                </div>
-                <div className="border-t border-gray-400 pt-2">
-                  <span className="font-bold block">Contabilidad / Finanzas</span>
-                  <span className="text-[10px] text-gray-400">Reposición de Fondo</span>
+
+                {reportePorSolicitante.map((sol) => (
+                  <div
+                    key={sol.nombre}
+                    className="seccion-solicitante border border-gray-300 rounded-xl overflow-hidden bg-white shadow-sm"
+                    style={{ pageBreakInside: 'avoid', breakInside: 'avoid' }}
+                  >
+                    {/* Encabezado del Solicitante */}
+                    <div className="cabecera-solicitante bg-slate-100/90 px-4 py-2.5 border-b border-gray-300 flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] font-black uppercase tracking-wider text-gray-500">
+                          Solicitante:
+                        </span>
+                        <span className="text-xs font-black text-brand-dark">
+                          {sol.nombre}
+                        </span>
+                        <span className="text-[10px] font-bold text-gray-400 bg-white px-2 py-0.5 rounded-full border border-gray-200">
+                          {sol.cantidadSolicitudes} {sol.cantidadSolicitudes === 1 ? 'solicitud' : 'solicitudes'}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-4 text-xs font-bold">
+                        <div>
+                          <span className="text-[10px] text-gray-500 uppercase font-semibold mr-1">Total Liquidado:</span>
+                          <span className="text-slate-700">S/ {sol.totalLiquidado.toFixed(2)}</span>
+                        </div>
+                        <div className="border-l border-gray-300 pl-3">
+                          <span className="text-[10px] text-gray-500 uppercase font-semibold mr-1">Total Gastado:</span>
+                          <span className="text-red-600 font-black">S/ {sol.totalGastado.toFixed(2)}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Tabla de comprobantes del solicitante */}
+                    <table className="w-full text-left text-xs border-collapse">
+                      <thead>
+                        <tr className="bg-slate-50 text-slate-600 font-black text-[10px] uppercase border-b border-gray-200">
+                          <th className="p-2 border-r border-gray-200 w-16 text-center"># Req</th>
+                          <th className="p-2 border-r border-gray-200 w-24">Fecha</th>
+                          <th className="p-2 border-r border-gray-200 w-20 text-center">Tipo Caja</th>
+                          <th className="p-2 border-r border-gray-200">Concepto / Subgasto</th>
+                          <th className="p-2 border-r border-gray-200">Comprobante / N° Doc</th>
+                          <th className="p-2 border-r border-gray-200 w-28">RUC</th>
+                          <th className="p-2 text-right w-24">Importe</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {sol.gastos.map((g, idx) => (
+                          <tr key={idx} className="border-b border-gray-100 hover:bg-slate-50/50">
+                            <td className="p-2 border-r border-gray-200 text-center font-bold text-slate-700">#{g.reqId}</td>
+                            <td className="p-2 border-r border-gray-200 text-slate-500 text-[11px]">{formatearFechaCorta(g.fecha)}</td>
+                            <td className="p-2 border-r border-gray-200 text-center">
+                              <span className="px-1.5 py-0.5 rounded text-[9px] font-black bg-slate-100 text-slate-700 border border-slate-200">
+                                Tipo {g.tipoCaja}
+                              </span>
+                            </td>
+                            <td className="p-2 border-r border-gray-200 text-slate-800 font-medium">
+                              {g.subgasto}
+                              {g.categoria && <span className="text-[10px] text-gray-400 block">{g.categoria}</span>}
+                            </td>
+                            <td className="p-2 border-r border-gray-200 text-slate-600 text-[11px] font-mono">{g.nroFactura}</td>
+                            <td className="p-2 border-r border-gray-200 text-slate-500 text-[11px] font-mono">{g.nroRuc}</td>
+                            <td className="p-2 text-right font-black text-slate-800">S/ {g.costo.toFixed(2)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                      <tfoot>
+                        <tr className="bg-slate-50 font-black text-xs border-t border-gray-200">
+                          <td colSpan={6} className="p-2 text-right uppercase text-[10px] text-slate-500">
+                            Total Solicitante ({sol.nombre}):
+                          </td>
+                          <td className="p-2 text-right font-black text-slate-900 border-l border-gray-200">
+                            S/ {sol.totalGastado.toFixed(2)}
+                          </td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+                ))}
+
+                {/* Total Consolidado de la Semana */}
+                <div
+                  className="bg-slate-900 text-white p-3.5 rounded-xl flex items-center justify-between font-black text-sm"
+                  style={{ pageBreakInside: 'avoid', breakInside: 'avoid' }}
+                >
+                  <span className="uppercase tracking-wider text-slate-200">
+                    TOTAL GENERAL LIQUIDADO EN SEMANA:
+                  </span>
+                  <span className="text-emerald-400 text-base">
+                    S/ {totalGastoVal.toFixed(2)}
+                  </span>
                 </div>
               </div>
             </div>
@@ -850,9 +1144,19 @@ const BalanceSemanal = () => {
           <div className="bg-white rounded-3xl w-full max-w-2xl shadow-2xl border border-gray-100 flex flex-col max-h-[92vh] overflow-hidden animate-scale-up">
             <div className="px-5 py-3.5 bg-white border-b border-gray-100 flex items-center justify-between shrink-0">
               <div>
-                <span className="text-[10px] font-black uppercase tracking-widest text-brand-primary">
-                  Requerimiento #{solicitudDetalle.id}
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-black uppercase tracking-widest text-brand-primary">
+                    Requerimiento #{solicitudDetalle.id}
+                  </span>
+                  {(() => {
+                    const tipoModal = obtenerTipoCaja(solicitudDetalle);
+                    return (
+                      <span className={`text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded-lg border ${tipoModal.claseBadge}`}>
+                        {tipoModal.etiqueta}
+                      </span>
+                    );
+                  })()}
+                </div>
                 <h3 className="text-sm font-black text-brand-dark">Comprobantes Adjuntos</h3>
               </div>
               <button

@@ -30,6 +30,7 @@ const cabeceraInicial = {
   monto_solicitado: '',
   obs: '',
   fecha_solicitud: '',
+  empresa_id: null,
 };
 
 // ============================================================================
@@ -76,6 +77,7 @@ const mapearCabeceraExistente = (req) => {
     monto_solicitado: req.monto_solicitado || '',
     obs: req.obs || '',
     fecha_solicitud: req.fecha_solicitud ? req.fecha_solicitud.slice(0, 16) : '',
+    empresa_id: req.empresa_id !== undefined ? (typeof req.empresa_id === 'object' ? req.empresa_id?.id : req.empresa_id) : null,
   };
 };
 
@@ -122,6 +124,7 @@ const mapearDetallesExistentes = (detallesLista) => {
       subgasto_obj: subgastoObj,
       lima_provincia: d.lima_provincia || 'L',
       provincia_url: extraerProvinciaUrl(d.provincia_id),
+      empresa_id: d.empresa_id || (typeof d.empresa === 'object' ? d.empresa?.id : d.empresa) || null,
       nro_factura: d.nro_factura || '',
       nro_ruc: d.nro_ruc || '',
       placa: d.placa || '',
@@ -309,6 +312,7 @@ const NewRequest = () => {
           estado_requerimiento: 'PD',
           obs: cabecera.obs || '',
           fecha_solicitud: cabecera.fecha_solicitud,
+          empresa_id: cabecera.empresa_id || null,
         };
 
         const resRequerimiento = await fetchAuth(
@@ -346,6 +350,7 @@ const NewRequest = () => {
           if (provUrl) formData.append('provincia_id', provUrl);
           if (det.nro_factura) formData.append('nro_factura', det.nro_factura);
           if (det.nro_ruc) formData.append('nro_ruc', det.nro_ruc);
+          if (det.empresa_id) formData.append('empresa_id', String(det.empresa_id));
           if (det.placa) formData.append('placa', det.placa);
           if (origUrl) formData.append('origen', origUrl);
           if (destUrl) formData.append('destino', destUrl);
@@ -470,6 +475,7 @@ const NewRequest = () => {
             if (provUrl) formData.append('provincia_id', provUrl);
             if (det.nro_factura) formData.append('nro_factura', det.nro_factura);
             if (det.nro_ruc) formData.append('nro_ruc', det.nro_ruc);
+            if (det.empresa_id) formData.append('empresa_id', String(det.empresa_id));
             if (det.placa) formData.append('placa', det.placa);
             if (origUrl) formData.append('origen', origUrl);
             if (destUrl) formData.append('destino', destUrl);

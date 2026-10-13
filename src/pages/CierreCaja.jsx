@@ -25,6 +25,7 @@ import {
 } from 'lucide-react';
 import { useUserStore } from '../store/userStore';
 import { fetchAuth, extraerMensajeError } from '../utils/fetchAuth';
+import { obtenerTipoCaja } from '../utils/tipoCaja';
 import Toast from '../components/Toast';
 
 const API_URL = import.meta.env.DEV ? '' : (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
@@ -483,85 +484,87 @@ const CierreCaja = () => {
             </span>
           </div>
         ) : solicitudesFiltradas.length > 0 ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5">
+          <div className="space-y-1.5 sm:space-y-2">
             {solicitudesFiltradas.map((req) => {
-              const montoSol = parseFloat(req.monto_solicitado) || 0;
-              const totalGast = parseFloat(req.total_gastado) || 0;
+              const totalGast = parseFloat(req.total_gastado || req.monto_solicitado || 0);
               const nombreSolicitante = obtenerNombreSolicitante(req.usuario_id);
               const numComprobantes = (req.detalle || req.detalles || []).length;
+              const tipoCajaInfo = obtenerTipoCaja(req);
 
               return (
                 <div
                   key={req.id}
-                  className="bg-white rounded-2xl p-3.5 sm:p-4 border border-gray-100 hover:border-brand-primary/40 shadow-sm transition-all flex flex-col justify-between border-l-4 border-l-blue-500"
+                  onClick={() => setSolicitudSeleccionada(req)}
+                  className="p-2.5 sm:p-3 bg-white hover:bg-blue-50/30 rounded-xl sm:rounded-2xl border border-gray-100 hover:border-blue-200 flex items-center justify-between gap-2.5 sm:gap-4 transition-all cursor-pointer group shadow-xs"
                 >
-                  <div className="space-y-1.5">
-                    <div className="flex items-center justify-between">
-                      <span className="text-[11px] font-black text-brand-dark bg-brand-light px-2 py-0.5 rounded-lg">
-                        #{req.id}
-                      </span>
-                      <span className="text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded-lg border bg-blue-50 text-blue-600 border-blue-200 flex items-center gap-1">
-                        <CheckCircle2 size={11} />
-                        Liquidado
-                      </span>
-                    </div>
+                  {/* Lado izquierdo: ID, Badge Tipo, Solicitante e info rápida */}
+                  <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
+                    <span className="text-xs font-black text-brand-dark bg-brand-light border border-gray-200/60 px-2 py-1 rounded-lg shrink-0">
+                      #{req.id}
+                    </span>
 
-                    <div>
-                      <h3 className="text-xs sm:text-sm font-black text-brand-dark leading-tight truncate">
-                        {nombreSolicitante}
-                      </h3>
-                      <div className="flex items-center gap-1 text-[11px] text-gray-400 font-medium mt-0.5">
-                        <Calendar size={12} className="text-brand-primary" />
-                        <span>{req.fecha_solicitud ? req.fecha_solicitud.replace('T', ' ').slice(0, 16) : '—'}</span>
+                    <span
+                      className={`text-[9px] sm:text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded-lg border shrink-0 ${tipoCajaInfo.claseBadge}`}
+                    >
+                      {tipoCajaInfo.etiqueta}
+                    </span>
+
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1.5 sm:gap-2">
+                        <h4 className="text-xs sm:text-sm font-black text-brand-dark leading-tight truncate group-hover:text-brand-primary transition-colors">
+                          {nombreSolicitante}
+                        </h4>
+                        <span className="hidden md:inline-block text-[10px] font-bold text-gray-400 shrink-0">
+                          • {req.area_id || 'Área'}
+                        </span>
                       </div>
-                      {req.obs && (
-                        <p className="text-[11px] text-gray-600 font-medium mt-0.5 line-clamp-1 italic">
-                          "{req.obs}"
-                        </p>
-                      )}
+                      <div className="flex items-center gap-2 text-[10px] text-gray-400 mt-0.5">
+                        <span className="shrink-0">{req.fecha_solicitud ? req.fecha_solicitud.slice(0, 10) : '—'}</span>
+                        <span className="shrink-0">• {numComprobantes} doc(s)</span>
+                        {req.obs && (
+                          <span className="italic truncate max-w-[140px] sm:max-w-xs md:max-w-md hidden sm:inline text-gray-500">
+                            "{req.obs}"
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </div>
 
-                  <div className="mt-2.5 pt-2 border-t border-gray-50 flex items-center justify-between text-xs">
-                    <div>
+                  {/* Lado derecho: Monto y Botones compactos */}
+                  <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+                    <div className="text-right">
                       <span className="text-[9px] font-bold text-gray-400 uppercase tracking-wider block">
                         Gasto Total
                       </span>
-                      <span className="text-xs sm:text-sm font-black text-brand-primary">
+                      <span className="text-xs sm:text-sm font-black text-brand-dark">
                         S/ {totalGast.toFixed(2)}
                       </span>
                     </div>
 
-                    <div className="text-right">
-                      <span className="text-[9px] font-bold text-gray-400 uppercase tracking-wider block">
-                        Comprobantes
-                      </span>
-                      <span className="text-xs font-bold text-gray-600">
-                        {numComprobantes} doc(s)
-                      </span>
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSolicitudSeleccionada(req);
+                        }}
+                        className="p-1.5 bg-gray-50 hover:bg-brand-light text-gray-600 hover:text-brand-primary rounded-lg transition-colors border border-gray-100"
+                        title="Ver Comprobantes"
+                      >
+                        <Eye size={13} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          manejarAnularSolicitud(req);
+                        }}
+                        className="p-1.5 bg-red-50 hover:bg-red-100 text-red-500 hover:text-red-700 rounded-lg transition-colors border border-red-100"
+                        title="Anular Solicitud"
+                      >
+                        <Trash2 size={13} />
+                      </button>
                     </div>
-                  </div>
-
-                  {/* Acciones de Auditoría y Anulación */}
-                  <div className="mt-2 pt-1.5 border-t border-gray-50 flex items-center justify-between gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setSolicitudSeleccionada(req)}
-                      className="text-[10px] font-black text-brand-primary hover:text-brand-secondary bg-brand-light px-2.5 py-1 rounded-lg flex items-center gap-1 transition-all"
-                    >
-                      <Eye size={12} />
-                      <span>Ver Comprobantes</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => manejarAnularSolicitud(req)}
-                      className="text-[10px] font-black text-red-600 hover:text-red-700 bg-red-50 hover:bg-red-100 px-2.5 py-1 rounded-lg border border-red-200 flex items-center gap-1 transition-all"
-                      title="Anular o Rechazar solicitud si tiene error"
-                    >
-                      <Trash2 size={12} />
-                      <span>Anular</span>
-                    </button>
                   </div>
                 </div>
               );
@@ -667,9 +670,19 @@ const CierreCaja = () => {
           <div className="bg-white rounded-3xl w-full max-w-2xl shadow-2xl border border-gray-100 flex flex-col max-h-[92vh] overflow-hidden animate-scale-up">
             <div className="px-5 py-3.5 bg-white border-b border-gray-100 flex items-center justify-between shrink-0">
               <div>
-                <span className="text-[10px] font-black uppercase tracking-widest text-brand-primary">
-                  Auditoría #{solicitudSeleccionada.id}
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-black uppercase tracking-widest text-brand-primary">
+                    Auditoría #{solicitudSeleccionada.id}
+                  </span>
+                  {(() => {
+                    const tipoModal = obtenerTipoCaja(solicitudSeleccionada);
+                    return (
+                      <span className={`text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded-lg border ${tipoModal.claseBadge}`}>
+                        {tipoModal.etiqueta}
+                      </span>
+                    );
+                  })()}
+                </div>
                 <h3 className="text-sm font-black text-brand-dark">Comprobantes de la Rendición</h3>
               </div>
               <button

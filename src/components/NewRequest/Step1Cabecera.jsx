@@ -1,7 +1,9 @@
-import React, { useEffect, useState } from 'react';
-import { DollarSign, FileText, Info, ChevronDown, Users } from 'lucide-react';
+import React, { useEffect, useState, useMemo } from 'react';
+import { DollarSign, FileText, Info, ChevronDown, Users, Building } from 'lucide-react';
 import { useUserStore } from '../../store/userStore';
+import { useCatalogoStore } from '../../store/catalogoStore';
 import { fetchAuth } from '../../utils/fetchAuth';
+import { obtenerTipoCaja, LISTA_EMPRESAS } from '../../utils/tipoCaja';
 
 const API_URL = import.meta.env.DEV ? '' : import.meta.env.VITE_API_URL;
 
@@ -19,12 +21,29 @@ const esSupervisor = (puesto) =>
  * - Supervisores/Jefes/Gerentes pueden elegir el solicitante de su área.
  * - El campo observaciones solo es visible para supervisores.
  * - La fecha toma la hora actual y permite al usuario modificarla.
+ * - Permite elegir la empresa de SI_Empresas para definir el Tipo de Caja (A, B, C, D, E).
  * @param {Object} datos - Estado actual del formulario maestro.
  * @param {Function} onChange - Callback para actualizar el estado maestro.
  */
 const Step1Cabecera = ({ datos, onChange }) => {
   const { user, updateUser } = useUserStore();
+  const { empresas } = useCatalogoStore();
   const esSup = esSupervisor(user?.puesto);
+
+  const listaEmpresasDisponibles = useMemo(() => {
+    if (Array.isArray(empresas) && empresas.length > 0) {
+      return empresas.map((emp) => {
+        const idNum = emp.id;
+        const info = obtenerTipoCaja(idNum);
+        return {
+          id: idNum,
+          nombre: emp.nombre || emp.razon_social || `Empresa #${idNum}`,
+          tipo: info.tipo,
+        };
+      });
+    }
+    return LISTA_EMPRESAS;
+  }, [empresas]);
 
   // Fecha-hora actual en formato datetime-local (YYYY-MM-DDTHH:mm)
   const [ahora] = useState(() => {

@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { useUserStore } from '../store/userStore';
 import { fetchAuth } from '../utils/fetchAuth';
+import { obtenerTipoCaja } from '../utils/tipoCaja';
 import Toast from '../components/Toast';
 
 const API_URL = import.meta.env.DEV ? '' : (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
@@ -156,6 +157,15 @@ const MisSolicitudes = () => {
   // Filtros
   const [busqueda, setBusqueda] = useState('');
   const [filtroEstado, setFiltroEstado] = useState('TODOS');
+
+  // Capturar término de búsqueda proveniente del Header vía URL query param
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const parametroBuscar = params.get('buscar');
+    if (parametroBuscar !== null) {
+      setBusqueda(parametroBuscar);
+    }
+  }, [location.search]);
 
   // Modal de Detalle y Visor de Imagen
   const [solicitudSeleccionada, setSolicitudSeleccionada] = useState(null);
@@ -504,6 +514,7 @@ const MisSolicitudes = () => {
               const listaDet = req.detalle || req.detalles || [];
               const numComprobantes = listaDet.length;
               const nombreSolicitante = obtenerNombreSolicitante(req.usuario_id);
+              const tipoCajaInfo = obtenerTipoCaja(req);
 
               return (
                 <div
@@ -516,9 +527,16 @@ const MisSolicitudes = () => {
                 >
                   <div className="space-y-1.5">
                     <div className="flex items-center justify-between">
-                      <span className="text-[11px] font-black text-brand-dark bg-brand-light px-2 py-0.5 rounded-lg">
-                        #{req.id}
-                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[11px] font-black text-brand-dark bg-brand-light px-2 py-0.5 rounded-lg">
+                          #{req.id}
+                        </span>
+                        <span
+                          className={`text-[9px] sm:text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded-lg border ${tipoCajaInfo.claseBadge}`}
+                        >
+                          {tipoCajaInfo.etiqueta}
+                        </span>
+                      </div>
                       <span
                         className={`text-[9px] sm:text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded-lg border flex items-center gap-1 ${infoEstado.claseBadge}`}
                       >
@@ -619,9 +637,19 @@ const MisSolicitudes = () => {
             {/* Cabecera del Modal */}
             <div className="px-5 py-4 bg-white border-b border-gray-100 flex items-center justify-between shrink-0">
               <div>
-                <span className="text-[10px] font-black uppercase tracking-widest text-brand-primary">
-                  Liquidación #{solicitudSeleccionada.id}
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-black uppercase tracking-widest text-brand-primary">
+                    Liquidación #{solicitudSeleccionada.id}
+                  </span>
+                  {(() => {
+                    const tipoModal = obtenerTipoCaja(solicitudSeleccionada);
+                    return (
+                      <span className={`text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded-lg border ${tipoModal.claseBadge}`}>
+                        {tipoModal.etiqueta}
+                      </span>
+                    );
+                  })()}
+                </div>
                 <h3 className="text-base font-black text-brand-dark">Detalle de la Rendición</h3>
               </div>
               <button

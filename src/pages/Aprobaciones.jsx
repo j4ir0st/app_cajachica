@@ -25,6 +25,7 @@ import {
 } from 'lucide-react';
 import { useUserStore } from '../store/userStore';
 import { fetchAuth, extraerMensajeError } from '../utils/fetchAuth';
+import { obtenerTipoCaja } from '../utils/tipoCaja';
 import Toast from '../components/Toast';
 
 const API_URL = import.meta.env.DEV ? '' : (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
@@ -436,6 +437,7 @@ const Aprobaciones = () => {
               const nombreSolicitante = obtenerNombreSolicitante(req.usuario_id);
               const numComprobantes = (req.detalle || req.detalles || []).length;
               const tieneFotosCompletas = (req.detalle || req.detalles || []).every((d) => d.adj_cajachica);
+              const tipoCajaInfo = obtenerTipoCaja(req);
 
               return (
                 <div
@@ -444,9 +446,16 @@ const Aprobaciones = () => {
                 >
                   <div className="space-y-1.5">
                     <div className="flex items-center justify-between">
-                      <span className="text-[11px] font-black text-brand-dark bg-brand-light px-2 py-0.5 rounded-lg">
-                        #{req.id}
-                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[11px] font-black text-brand-dark bg-brand-light px-2 py-0.5 rounded-lg">
+                          #{req.id}
+                        </span>
+                        <span
+                          className={`text-[9px] sm:text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded-lg border ${tipoCajaInfo.claseBadge}`}
+                        >
+                          {tipoCajaInfo.etiqueta}
+                        </span>
+                      </div>
                       <span className="text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded-lg border bg-blue-50 text-blue-600 border-blue-200 flex items-center gap-1">
                         <CheckCircle2 size={11} />
                         Liquidado
@@ -565,9 +574,19 @@ const Aprobaciones = () => {
           <div className="bg-white rounded-3xl w-full max-w-2xl shadow-2xl border border-gray-100 flex flex-col max-h-[92vh] overflow-hidden animate-scale-up">
             <div className="px-5 py-3.5 bg-white border-b border-gray-100 flex items-center justify-between shrink-0">
               <div>
-                <span className="text-[10px] font-black uppercase tracking-widest text-brand-primary">
-                  Auditoría Requerimiento #{solicitudAuditoria.id}
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-black uppercase tracking-widest text-brand-primary">
+                    Auditoría Requerimiento #{solicitudAuditoria.id}
+                  </span>
+                  {(() => {
+                    const tipoModal = obtenerTipoCaja(solicitudAuditoria);
+                    return (
+                      <span className={`text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded-lg border ${tipoModal.claseBadge}`}>
+                        {tipoModal.etiqueta}
+                      </span>
+                    );
+                  })()}
+                </div>
                 <h3 className="text-sm font-black text-brand-dark">Revisión de Gastos y Comprobantes</h3>
               </div>
               <button
