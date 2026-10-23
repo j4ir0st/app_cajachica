@@ -17,12 +17,18 @@ import {
   Tag,
   Building,
   Edit2,
-  X
+  X,
+  Upload,
+  Eye
 } from 'lucide-react';
 import { useUserStore } from '../../store/userStore';
 import { useCatalogoStore } from '../../store/catalogoStore';
 import { fetchAuth } from '../../utils/fetchAuth';
 import { obtenerTipoCaja, LISTA_EMPRESAS } from '../../utils/tipoCaja';
+import { esArchivoPdf } from '../../utils/archivoUtil';
+import ModalVisorComprobante from '../ModalVisorComprobante';
+import Combobox from '../Combobox';
+import { formatearNombreEntidad, formatearSubtituloEntidad, esEntidadValidaEntrega } from '../../utils/entidades';
 
 const API_URL = import.meta.env.DEV ? '' : (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
 
@@ -52,7 +58,9 @@ const obtenerDetalleVacio = () => ({
   empresa_id: null,
   nro_factura: '',
   nro_ruc: '',
+  placa_id: null,
   placa: '',
+  placa_nombre: '',
   origen_url: null,
   destino_url: null,
   costo: '',
@@ -69,7 +77,8 @@ const obtenerDetalleVacio = () => ({
 /**
  * Determina si el puesto del usuario corresponde a Jefatura o Gestión.
  */
-const esRolGestion = (puesto) => {
+const esRolGestion = (puesto, user = null) => {
+  if (user?.is_superuser || user?.is_staff) return true;
   const p = (puesto || '').toLowerCase();
   return ['gerente', 'jefe', 'coordinador', 'supervisor', 'planner'].some((rol) => p.includes(rol));
 };
@@ -84,13 +93,14 @@ const esRolOperativo = (puesto) => {
 
 /**
  * Filtra los subgastos según el puesto del usuario:
- * - Jefatura/Gestión: Visualiza todos los subgastos.
+ * - Jefatura/Gestión/Superusuario: Visualiza todos los subgastos.
  * - Operativo: Visualiza únicamente los marcados con visible_para_operativo === true.
  * - Administrativo/Otros: Visualiza únicamente los marcados con visible_para_operativo === false.
  */
-const filtrarSubgastosPorPuesto = (subgastos, puesto) => {
+const filtrarSubgastosPorPuesto = (subgastos, puesto, user = null) => {
   if (!Array.isArray(subgastos) || subgastos.length === 0) return [];
-  if (!puesto || esRolGestion(puesto)) return subgastos;
+  if (user?.is_superuser || user?.is_staff) return subgastos;
+  if (!puesto || esRolGestion(puesto, user)) return subgastos;
   if (esRolOperativo(puesto)) {
     const operativos = subgastos.filter((s) => s.visible_para_operativo === true);
     return operativos.length > 0 ? operativos : subgastos;
@@ -134,7 +144,7 @@ const coincidenUrlsOIds = (url1, url2) => {
  */
 const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLimite }) => {
   const { user } = useUserStore();
-  const { tiposGasto, subgastos, entidades, provincias, empresas, cargando, error: errorCatalogo, cargarCatalogos } = useCatalogoStore();
+  const { tiposGasto, subgastos, entidades, provincias, empresas, placas, cargando, error: errorCatalogo, cargarCatalogos } = useCatalogoStore();
 
   const listaEmpresasDisponibles = useMemo(() => {
     return Array.isArray(empresas) && empresas.length > 0 ? empresas : LISTA_EMPRESAS;
@@ -145,7 +155,9 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
   const [modalAbierto, setModalAbierto] = useState(false);
   const [editandoIdx, setEditandoIdx] = useState(null);
   const [errorLocal, setErrorLocal] = useState('');
+  const [archivoVisor, setArchivoVisor] = useState(null);
 
+  const referenciaCamara = useRef(null);
   const referenciaArchivo = useRef(null);
 
   // Carga reactiva de catálogos si no están presentes en memoria
@@ -157,8 +169,8 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
 
   // Subgastos visibles según el rol del usuario (con fallback seguro)
   const subgastosDisponibles = useMemo(() => {
-    return filtrarSubgastosPorPuesto(subgastos, user?.puesto);
-  }, [subgastos, user?.puesto]);
+    return filtrarSubgastosPorPuesto(subgastos, user?.puesto, user);
+  }, [subgastos, user]);
 
   // Tipos de gasto disponibles (vinculados a los subgastos o catálogo completo)
   const tiposGastoDisponibles = useMemo(() => {
@@ -213,6 +225,44 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
     );
   }, [formulario.subgasto_url, formulario.subgasto_obj, subgastos]);
 
+  // Opciones formateadas para Combobox tipo PowerApps
+  const opcionesSubgasto = useMemo(() => {
+    return subgastosPorTipo.map((s) => ({
+      value: s.url,
+      label: s.nombre,
+      sublabel: s.mensaje_detalle || '',
+    }));
+  }, [subgastosPorTipo]);
+
+  const opcionesProvincias = useMemo(() => {
+    return provincias.map((p) => ({
+      value: p.url,
+      label: p.nombre,
+      sublabel: p.departamento ? `Dpto: ${p.departamento}` : '',
+    }));
+  }, [provincias]);
+
+  const opcionesEntidades = useMemo(() => {
+    return (entidades || [])
+      .filter(esEntidadValidaEntrega)
+      .map((e) => ({
+        value: e.url,
+        label: formatearNombreEntidad(e),
+        sublabel: formatearSubtituloEntidad(e),
+        busquedaExtra: `${e.ruc || ''} ${e.razon_social || ''} ${e.sede || ''} ${e.codigo_sede || ''}`,
+      }));
+  }, [entidades]);
+
+  const opcionesPlacas = useMemo(() => {
+    return (placas || []).map((p) => ({
+      value: p.id,
+      label: p.placa || `Placa #${p.id}`,
+      sublabel: p.chofer ? `Chofer: ${p.chofer}` : '',
+      busquedaExtra: `${p.placa || ''} ${p.chofer || ''}`,
+      raw: p,
+    }));
+  }, [placas]);
+
   // ============================================================================
   // MANEJADORES DE CAMBIO Y REGLAS REACTIVAS DEL FORMULARIO
   // ============================================================================
@@ -220,6 +270,28 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
   const manejarCambio = (campo, valor) => {
     setErrorLocal('');
     setFormulario((prev) => ({ ...prev, [campo]: valor }));
+  };
+
+  const seleccionarPlaca = (val, opt) => {
+    setErrorLocal('');
+    if (!val) {
+      setFormulario((prev) => ({
+        ...prev,
+        placa_id: null,
+        placa: '',
+        placa_nombre: '',
+      }));
+      return;
+    }
+    const placaItem = opt?.raw || (placas || []).find((p) => p.id === val || String(p.id) === String(val));
+    const placaTexto = placaItem?.placa || '';
+    const placaNombre = placaItem ? (placaItem.chofer ? `${placaItem.placa} - ${placaItem.chofer}` : placaItem.placa) : '';
+    setFormulario((prev) => ({
+      ...prev,
+      placa_id: val,
+      placa: placaTexto,
+      placa_nombre: placaNombre,
+    }));
   };
 
   const seleccionarTipoGasto = (tipoUrl) => {
@@ -266,21 +338,25 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
       provincia_url: zonaCalculada === 'L' ? null : prev.provincia_url,
       origen_url: subEncontrado.requiere_origen_destino || subEncontrado.requiere_entidad ? prev.origen_url : null,
       destino_url: subEncontrado.requiere_origen_destino ? prev.destino_url : null,
+      placa_id: subEncontrado.requiere_placa ? prev.placa_id : null,
       placa: subEncontrado.requiere_placa ? prev.placa : '',
+      placa_nombre: subEncontrado.requiere_placa ? prev.placa_nombre : '',
       nro_ruc: subEncontrado.requiere_comprobante ? prev.nro_ruc : '',
       nro_factura: subEncontrado.requiere_comprobante ? prev.nro_factura : '',
     }));
   };
 
-  const manejarArchivoImagen = (e) => {
-    const archivo = e.target.files[0];
+  const manejarArchivo = (e) => {
+    const archivo = e.target.files?.[0];
     if (!archivo) return;
     setErrorLocal('');
+    const esPdf = esArchivoPdf(archivo);
     const vistaPrevia = URL.createObjectURL(archivo);
     setFormulario((prev) => ({
       ...prev,
       adj_cajachica: archivo,
       _preview: vistaPrevia,
+      _esPdf: esPdf,
     }));
   };
 
@@ -330,8 +406,8 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
       }
 
       if (subgastoActivo.requiere_placa) {
-        if (!formulario.placa || formulario.placa.trim().length < 5) {
-          setErrorLocal('Debe ingresar un número de placa vehicular válido.');
+        if (!formulario.placa_id && (!formulario.placa || formulario.placa.trim().length < 3)) {
+          setErrorLocal('Debe seleccionar la unidad de transporte (placa).');
           return false;
         }
       }
@@ -355,10 +431,6 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
     }
 
     if (paso === 4) {
-      if (!formulario.adj_cajachica && !formulario._preview) {
-        setErrorLocal('Adjuntar la foto o comprobante es OBLIGATORIO para todo gasto.');
-        return false;
-      }
       if (subgastoActivo?.requiere_detalle && (!formulario.detalle || formulario.detalle.trim() === '')) {
         setErrorLocal('La descripción detallada es obligatoria para este concepto.');
         return false;
@@ -391,6 +463,12 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
   const superaLimite = montoLimite && totalActual > parseFloat(montoLimite);
 
   const abrirModalNuevo = () => {
+    if (referenciaCamara.current) {
+      referenciaCamara.current.value = '';
+    }
+    if (referenciaArchivo.current) {
+      referenciaArchivo.current.value = '';
+    }
     setFormulario(obtenerDetalleVacio());
     setEditandoIdx(null);
     setPasoWizard(1);
@@ -399,6 +477,12 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
   };
 
   const abrirModalEdicion = (idx) => {
+    if (referenciaCamara.current) {
+      referenciaCamara.current.value = '';
+    }
+    if (referenciaArchivo.current) {
+      referenciaArchivo.current.value = '';
+    }
     const item = detalles[idx];
     const sub = subgastos.find(
       (s) =>
@@ -412,8 +496,30 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
       (sub?.tipogasto_id?.id ? `${API_URL}/RC_TipoGasto/${sub.tipogasto_id.id}/` : null) ||
       sub?.tipogasto_id;
 
+    let placaId = item.placa_id;
+    let placaTexto = item.placa || '';
+    let placaNombre = item.placa_nombre || '';
+
+    if (!placaId && placaTexto && Array.isArray(placas)) {
+      const matchPlaca = placas.find((p) => (p.placa || '').toUpperCase() === placaTexto.toUpperCase());
+      if (matchPlaca) {
+        placaId = matchPlaca.id;
+        placaTexto = matchPlaca.placa;
+        placaNombre = matchPlaca.chofer ? `${matchPlaca.placa} - ${matchPlaca.chofer}` : matchPlaca.placa;
+      }
+    } else if (placaId && !placaNombre && Array.isArray(placas)) {
+      const matchPlaca = placas.find((p) => p.id === placaId || String(p.id) === String(placaId));
+      if (matchPlaca) {
+        placaTexto = matchPlaca.placa;
+        placaNombre = matchPlaca.chofer ? `${matchPlaca.placa} - ${matchPlaca.chofer}` : matchPlaca.placa;
+      }
+    }
+
     setFormulario({
       ...item,
+      placa_id: placaId || null,
+      placa: placaTexto,
+      placa_nombre: placaNombre,
       tipogasto_url: tipoUrl || item.tipogasto_url,
       subgasto_url: item.subgasto_url || sub?.url,
       subgasto_obj: sub || item.subgasto_obj,
@@ -425,6 +531,12 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
   };
 
   const cerrarModal = () => {
+    if (referenciaCamara.current) {
+      referenciaCamara.current.value = '';
+    }
+    if (referenciaArchivo.current) {
+      referenciaArchivo.current.value = '';
+    }
     setModalAbierto(false);
     setFormulario(obtenerDetalleVacio());
     setEditandoIdx(null);
@@ -541,8 +653,18 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
         className="w-full flex items-center justify-center gap-2.5 py-3.5 px-4 bg-gradient-to-r from-brand-primary to-brand-secondary text-white font-black text-sm rounded-2xl shadow-lg shadow-brand-primary/20 hover:shadow-xl hover:scale-[1.01] active:scale-[0.99] transition-all"
       >
         <Plus size={18} strokeWidth={3} />
-        AGREGAR COMPROBANTE DE GASTO
+        AGREGAR DETALLE DE GASTO
       </button>
+
+      {/* Aviso si existen gastos registrados sin comprobante */}
+      {detalles.some((d) => !d.adj_cajachica && !d._preview) && (
+        <div className="p-3 bg-amber-50 border border-amber-200/80 rounded-2xl flex items-start gap-2.5 text-xs text-amber-900">
+          <AlertCircle size={16} className="text-amber-600 shrink-0 mt-0.5" />
+          <p>
+            <span className="font-bold">Aviso:</span> Tiene comprobantes pendientes de adjuntar. Puede guardar la solicitud como <strong>Borrador</strong>, pero para <strong>Liquidar</strong> se debe actualizar el registro con el adjunto correspondiente.
+          </p>
+        </div>
+      )}
 
       {/* Lista de Comprobantes Registrados (Tarjetas para Móvil) */}
       {detalles.length > 0 ? (
@@ -561,14 +683,31 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
               >
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex items-start gap-3">
-                    {det._preview ? (
-                      <img
-                        src={det._preview}
-                        alt="Comprobante"
-                        className="w-14 h-14 object-cover rounded-xl border border-gray-100 shrink-0"
-                      />
+                    {det._preview || det.adj_cajachica ? (
+                      <button
+                        type="button"
+                        onClick={() => setArchivoVisor(det._preview || det.adj_cajachica)}
+                        className="group/thumb relative w-14 h-14 rounded-xl overflow-hidden border border-gray-200 shrink-0 hover:opacity-90 transition-opacity bg-white"
+                        title="Ver comprobante completo"
+                      >
+                        {esArchivoPdf(det.adj_cajachica, det._preview) ? (
+                          <div className="w-full h-full bg-red-50 text-red-600 flex flex-col items-center justify-center font-bold">
+                            <FileText size={20} />
+                            <span className="text-[8px] font-black uppercase tracking-wider mt-0.5">PDF</span>
+                          </div>
+                        ) : (
+                          <img
+                            src={det._preview || (typeof det.adj_cajachica === 'string' ? det.adj_cajachica : '')}
+                            alt="Comprobante"
+                            className="w-full h-full object-cover"
+                          />
+                        )}
+                        <div className="absolute inset-0 bg-brand-dark/40 opacity-0 group-hover/thumb:opacity-100 flex items-center justify-center text-white transition-opacity">
+                          <Eye size={16} />
+                        </div>
+                      </button>
                     ) : (
-                      <div className="w-14 h-14 rounded-xl bg-brand-light flex items-center justify-center text-brand-primary font-black shrink-0">
+                      <div className="w-14 h-14 rounded-xl bg-amber-50 border border-amber-200 flex items-center justify-center text-amber-600 font-black shrink-0">
                         <Receipt size={22} />
                       </div>
                     )}
@@ -593,6 +732,12 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
 
                 {/* Etiquetas de Información Específica */}
                 <div className="flex flex-wrap gap-1.5 pt-2 border-t border-gray-50 text-[11px]">
+                  {!det.adj_cajachica && !det._preview && (
+                    <span className="px-2 py-0.5 bg-amber-50 text-amber-700 border border-amber-200 rounded-md font-bold text-[10px] flex items-center gap-1">
+                      <AlertCircle size={11} className="text-amber-500" />
+                      Sin comprobante (Obligatorio para liquidar)
+                    </span>
+                  )}
                   <span className="px-2 py-0.5 bg-gray-50 text-gray-600 rounded-md font-semibold flex items-center gap-1">
                     <MapPin size={11} className="text-brand-primary" />
                     {det.lima_provincia === 'L' ? 'Lima' : `Provincia (${prov?.nombre || '—'})`}
@@ -621,23 +766,23 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
                     </span>
                   )}
 
-                  {det.placa && (
+                  {(det.placa_nombre || det.placa) && (
                     <span className="px-2 py-0.5 bg-amber-50 text-amber-700 rounded-md font-bold flex items-center gap-1">
                       <Car size={11} />
-                      {det.placa}
+                      {det.placa_nombre || det.placa}
                     </span>
                   )}
 
                   {orig && dest && (
                     <span className="px-2 py-0.5 bg-blue-50 text-blue-700 rounded-md font-semibold">
-                      {orig.sede || orig.nombre} ➔ {dest.sede || dest.nombre}
+                      {formatearNombreEntidad(orig)} ➔ {formatearNombreEntidad(dest)}
                     </span>
                   )}
 
                   {orig && !dest && (
                     <span className="px-2 py-0.5 bg-blue-50 text-blue-700 rounded-md font-semibold flex items-center gap-1">
                       <Building size={11} />
-                      {orig.sede || orig.nombre}
+                      {formatearNombreEntidad(orig)}
                     </span>
                   )}
                 </div>
@@ -752,24 +897,14 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
                     <label className="block text-xs font-black text-brand-dark uppercase tracking-wider mb-1.5">
                       2. Subgasto / Concepto Específico *
                     </label>
-                    <div className="relative">
-                      <select
-                        value={valorSubgastoSeleccionado}
-                        onChange={(e) => seleccionarSubGasto(e.target.value || null)}
-                        disabled={subgastosPorTipo.length === 0}
-                        className="w-full appearance-none bg-white border-2 border-gray-100 focus:border-brand-primary rounded-2xl px-4 py-3 text-sm font-semibold text-brand-dark outline-none transition-colors disabled:opacity-50 disabled:bg-gray-50"
-                      >
-                        <option value="">
-                          {subgastosPorTipo.length === 0 ? 'Seleccione primero un Tipo' : 'Seleccione concepto...'}
-                        </option>
-                        {subgastosPorTipo.map((s) => (
-                          <option key={s.url} value={s.url}>
-                            {s.nombre}
-                          </option>
-                        ))}
-                      </select>
-                      <ChevronDown size={16} className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-                    </div>
+                    <Combobox
+                      options={opcionesSubgasto}
+                      value={valorSubgastoSeleccionado}
+                      onChange={(val) => seleccionarSubGasto(val)}
+                      placeholder={subgastosPorTipo.length === 0 ? 'Seleccione primero un Tipo' : 'Seleccione o busque concepto...'}
+                      disabled={subgastosPorTipo.length === 0}
+                      minParaBusqueda={6}
+                    />
                   </div>
 
                   {subgastoActivo && (
@@ -872,21 +1007,14 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
                       <label className="block text-xs font-black text-brand-dark uppercase tracking-wider mb-1.5">
                         Provincia de Destino *
                       </label>
-                      <div className="relative">
-                        <select
-                          value={formulario.provincia_url || ''}
-                          onChange={(e) => manejarCambio('provincia_url', e.target.value || null)}
-                          className="w-full appearance-none bg-white border-2 border-gray-100 focus:border-brand-primary rounded-2xl px-4 py-3 text-sm font-semibold text-brand-dark outline-none transition-colors"
-                        >
-                          <option value="">Seleccione provincia...</option>
-                          {provincias.map((p) => (
-                            <option key={p.url} value={p.url}>
-                              {p.nombre}
-                            </option>
-                          ))}
-                        </select>
-                        <ChevronDown size={16} className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-                      </div>
+                      <Combobox
+                        options={opcionesProvincias}
+                        value={formulario.provincia_url}
+                        onChange={(val) => manejarCambio('provincia_url', val)}
+                        placeholder="Buscar provincia..."
+                        icon={<MapPin size={14} className="text-brand-primary" />}
+                        minParaBusqueda={6}
+                      />
                     </div>
                   )}
                 </div>
@@ -980,15 +1108,15 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
                     <div className="bg-gray-50/80 p-4 rounded-2xl border border-gray-100 space-y-2">
                       <label className="block text-xs font-black text-brand-dark uppercase tracking-wider flex items-center gap-1.5">
                         <Car size={14} className="text-brand-primary" />
-                        Placa del Vehículo *
+                        Placa / Unidad de Transporte *
                       </label>
-                      <input
-                        type="text"
-                        maxLength={10}
-                        placeholder="Ej: ABC-123"
-                        value={formulario.placa}
-                        onChange={(e) => manejarCambio('placa', e.target.value.toUpperCase())}
-                        className="w-full bg-white border-2 border-gray-100 focus:border-brand-primary rounded-xl px-4 py-2.5 text-sm font-bold text-brand-dark outline-none transition-colors"
+                      <Combobox
+                        options={opcionesPlacas}
+                        value={formulario.placa_id}
+                        onChange={(val, opt) => seleccionarPlaca(val, opt)}
+                        placeholder="Buscar placa o chofer..."
+                        icon={<Car size={14} className="text-brand-primary" />}
+                        minParaBusqueda={6}
                       />
                     </div>
                   )}
@@ -1002,40 +1130,26 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
                       </span>
                       <div>
                         <label className="block text-xs font-bold text-gray-500 mb-1 uppercase tracking-wider">Sede / Origen *</label>
-                        <div className="relative">
-                          <select
-                            value={formulario.origen_url || ''}
-                            onChange={(e) => manejarCambio('origen_url', e.target.value || null)}
-                            className="w-full appearance-none bg-white border-2 border-gray-100 focus:border-brand-primary rounded-xl px-4 py-2.5 text-sm font-semibold text-brand-dark outline-none transition-colors"
-                          >
-                            <option value="">Seleccione origen...</option>
-                            {entidades.map((ent) => (
-                              <option key={ent.url} value={ent.url}>
-                                {ent.codigo_sede ? `${ent.codigo_sede} - ` : ''}{ent.sede || ent.nombre}
-                              </option>
-                            ))}
-                          </select>
-                          <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-                        </div>
+                        <Combobox
+                          options={opcionesEntidades}
+                          value={formulario.origen_url}
+                          onChange={(val) => manejarCambio('origen_url', val)}
+                          placeholder="Buscar sede de origen..."
+                          icon={<MapPin size={14} className="text-brand-primary" />}
+                          minParaBusqueda={6}
+                        />
                       </div>
 
                       <div>
                         <label className="block text-xs font-bold text-gray-500 mb-1 uppercase tracking-wider">Sede / Destino *</label>
-                        <div className="relative">
-                          <select
-                            value={formulario.destino_url || ''}
-                            onChange={(e) => manejarCambio('destino_url', e.target.value || null)}
-                            className="w-full appearance-none bg-white border-2 border-gray-100 focus:border-brand-primary rounded-xl px-4 py-2.5 text-sm font-semibold text-brand-dark outline-none transition-colors"
-                          >
-                            <option value="">Seleccione destino...</option>
-                            {entidades.map((ent) => (
-                              <option key={ent.url} value={ent.url}>
-                                {ent.codigo_sede ? `${ent.codigo_sede} - ` : ''}{ent.sede || ent.nombre}
-                              </option>
-                            ))}
-                          </select>
-                          <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-                        </div>
+                        <Combobox
+                          options={opcionesEntidades}
+                          value={formulario.destino_url}
+                          onChange={(val) => manejarCambio('destino_url', val)}
+                          placeholder="Buscar sede de destino..."
+                          icon={<MapPin size={14} className="text-brand-primary" />}
+                          minParaBusqueda={6}
+                        />
                       </div>
                     </div>
                   )}
@@ -1047,21 +1161,14 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
                         <Building size={14} className="text-brand-primary" />
                         Sede / Entidad *
                       </label>
-                      <div className="relative">
-                        <select
-                          value={formulario.origen_url || ''}
-                          onChange={(e) => manejarCambio('origen_url', e.target.value || null)}
-                          className="w-full appearance-none bg-white border-2 border-gray-100 focus:border-brand-primary rounded-xl px-4 py-2.5 text-sm font-semibold text-brand-dark outline-none transition-colors"
-                        >
-                          <option value="">Seleccione sede...</option>
-                          {entidades.map((ent) => (
-                            <option key={ent.url} value={ent.url}>
-                              {ent.codigo_sede ? `${ent.codigo_sede} - ` : ''}{ent.sede || ent.nombre}
-                            </option>
-                          ))}
-                        </select>
-                        <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-                      </div>
+                      <Combobox
+                        options={opcionesEntidades}
+                        value={formulario.origen_url}
+                        onChange={(val) => manejarCambio('origen_url', val)}
+                        placeholder="Buscar sede o entidad..."
+                        icon={<Building size={14} className="text-brand-primary" />}
+                        minParaBusqueda={6}
+                      />
                     </div>
                   )}
                 </div>
@@ -1072,56 +1179,143 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
                 <div className="space-y-4 animate-fade-in">
                   {/* Foto / Comprobante (Obligatorio) */}
                   <div>
-                    <label className="block text-xs font-black text-brand-dark uppercase tracking-wider mb-2 flex items-center gap-1.5">
-                      <Camera size={14} className="text-brand-primary" />
-                      Foto o Ticket del Comprobante *
-                      <span className="text-[10px] text-red-500 font-bold">(Obligatorio)</span>
-                    </label>
+                    <div className="flex items-center justify-between mb-2">
+                      <label className="text-xs font-black text-brand-dark uppercase tracking-wider flex items-center gap-1.5">
+                        <Camera size={14} className="text-brand-primary" />
+                        Foto o Ticket del Comprobante *
+                        <span className="text-[10px] text-red-500 font-bold">(Obligatorio)</span>
+                      </label>
+                      {(formulario.adj_cajachica || formulario._preview) && (
+                        <span className="text-[10px] font-black text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full flex items-center gap-1 border border-emerald-200">
+                          <CheckCircle2 size={11} /> Adjuntado
+                        </span>
+                      )}
+                    </div>
 
+                    {/* Inputs ocultos: Cámara directa vs Archivos/Galería del dispositivo */}
                     <input
-                      ref={referenciaArchivo}
+                      ref={referenciaCamara}
                       type="file"
                       accept="image/*"
                       capture="environment"
-                      onChange={manejarArchivoImagen}
+                      onChange={manejarArchivo}
+                      className="hidden"
+                    />
+                    <input
+                      ref={referenciaArchivo}
+                      type="file"
+                      accept="image/*,application/pdf"
+                      onChange={manejarArchivo}
                       className="hidden"
                     />
 
-                    {formulario._preview ? (
-                      <div className="relative rounded-2xl overflow-hidden border-2 border-brand-primary/30 p-2 bg-brand-light/30 flex items-center gap-4">
-                        <img
-                          src={formulario._preview}
-                          alt="Vista previa"
-                          className="w-20 h-20 object-cover rounded-xl border border-gray-200 shrink-0"
-                        />
+                    {/* Aviso informativo de borrador vs liquidación */}
+                    <div className="mb-3 p-2.5 bg-amber-50/90 border border-amber-200/90 rounded-xl flex items-start gap-2 text-xs text-amber-900">
+                      <AlertCircle size={15} className="text-amber-600 shrink-0 mt-0.5" />
+                      <p className="text-[11px] leading-snug">
+                        <strong>Aviso:</strong> El comprobante es obligatorio al <strong>Liquidar</strong>. Si desea guardar este detalle como <strong>Borrador</strong>, puede registrarlo sin comprobante, pero recuerde que para liquidar se debe actualizar el registro con el adjunto correspondiente.
+                      </p>
+                    </div>
+
+                    {formulario._preview || formulario.adj_cajachica ? (
+                      <div className="relative rounded-2xl overflow-hidden border-2 border-brand-primary/30 p-2.5 bg-brand-light/20 flex items-center gap-3.5">
+                        {esArchivoPdf(formulario.adj_cajachica, formulario._preview) ? (
+                          <div className="w-16 h-16 rounded-xl bg-red-50 border border-red-200 flex flex-col items-center justify-center shrink-0 text-red-500 font-bold">
+                            <FileText size={26} />
+                            <span className="text-[9px] font-black uppercase mt-0.5">PDF</span>
+                          </div>
+                        ) : (
+                          <img
+                            src={formulario._preview || (typeof formulario.adj_cajachica === 'string' ? formulario.adj_cajachica : '')}
+                            alt="Vista previa comprobante"
+                            className="w-16 h-16 object-cover rounded-xl border border-gray-200 shrink-0 bg-white"
+                          />
+                        )}
+
                         <div className="flex-1 min-w-0">
                           <p className="text-xs font-bold text-brand-dark truncate">
-                            {formulario.adj_cajachica?.name || 'Foto capturada'}
+                            {formulario.adj_cajachica?.name || (typeof formulario.adj_cajachica === 'string' ? 'Comprobante guardado' : 'Archivo adjuntado')}
                           </p>
                           <p className="text-[10px] text-emerald-600 font-bold mt-0.5 flex items-center gap-1">
-                            <CheckCircle2 size={12} /> Comprobante cargado
+                            <CheckCircle2 size={12} /> Comprobante seleccionado
                           </p>
-                          <button
-                            type="button"
-                            onClick={() => referenciaArchivo.current?.click()}
-                            className="mt-2 text-xs text-brand-primary font-bold hover:underline"
-                          >
-                            Cambiar imagen
-                          </button>
+
+                          {/* Opciones de reemplazo o eliminación */}
+                          <div className="mt-2 flex flex-wrap items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setArchivoVisor(formulario._preview || formulario.adj_cajachica)}
+                              className="text-[11px] text-emerald-600 font-bold hover:underline flex items-center gap-1"
+                            >
+                              <Eye size={12} /> Ver documento
+                            </button>
+                            <span className="text-gray-300">•</span>
+                            <button
+                              type="button"
+                              onClick={() => referenciaCamara.current?.click()}
+                              className="text-[11px] text-brand-primary font-bold hover:underline flex items-center gap-1"
+                            >
+                              <Camera size={12} /> Tomar otra foto
+                            </button>
+                            <span className="text-gray-300">•</span>
+                            <button
+                              type="button"
+                              onClick={() => referenciaArchivo.current?.click()}
+                              className="text-[11px] text-blue-600 font-bold hover:underline flex items-center gap-1"
+                            >
+                              <Upload size={12} /> Subir archivo
+                            </button>
+                            <span className="text-gray-300">•</span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setFormulario((prev) => ({ ...prev, adj_cajachica: null, _preview: null, _esPdf: false }));
+                                if (referenciaCamara.current) referenciaCamara.current.value = '';
+                                if (referenciaArchivo.current) referenciaArchivo.current.value = '';
+                              }}
+                              className="text-[11px] text-red-500 font-bold hover:underline flex items-center gap-1"
+                            >
+                              <X size={12} /> Quitar
+                            </button>
+                          </div>
                         </div>
                       </div>
                     ) : (
-                      <button
-                        type="button"
-                        onClick={() => referenciaArchivo.current?.click()}
-                        className="w-full py-6 px-4 rounded-2xl border-2 border-dashed border-brand-primary/40 bg-brand-light/30 hover:bg-brand-light/60 flex flex-col items-center justify-center gap-2 transition-all group"
-                      >
-                        <div className="w-12 h-12 rounded-2xl bg-white shadow-sm flex items-center justify-center text-brand-primary group-hover:scale-110 transition-transform">
-                          <Camera size={24} />
+                      <div className="space-y-2">
+                        {/* Opciones Mobile First: Cámara directa o Archivos/Galería */}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                          <button
+                            type="button"
+                            onClick={() => referenciaCamara.current?.click()}
+                            className="py-4 px-3 rounded-2xl border-2 border-dashed border-brand-primary/40 bg-brand-light/30 hover:bg-brand-light/60 active:bg-brand-light/80 flex items-center sm:flex-col justify-center gap-3 sm:gap-2 transition-all group active:scale-[0.98]"
+                          >
+                            <div className="w-10 h-10 rounded-xl bg-white shadow-sm flex items-center justify-center text-brand-primary group-hover:scale-110 transition-transform shrink-0">
+                              <Camera size={20} />
+                            </div>
+                            <div className="text-left sm:text-center">
+                              <span className="text-xs font-black text-brand-primary block">Tomar Foto</span>
+                              <span className="text-[10px] text-gray-500 font-medium">Abrir cámara directa</span>
+                            </div>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => referenciaArchivo.current?.click()}
+                            className="py-4 px-3 rounded-2xl border-2 border-dashed border-blue-300 bg-blue-50/40 hover:bg-blue-50/80 active:bg-blue-100 flex items-center sm:flex-col justify-center gap-3 sm:gap-2 transition-all group active:scale-[0.98]"
+                          >
+                            <div className="w-10 h-10 rounded-xl bg-white shadow-sm flex items-center justify-center text-blue-600 group-hover:scale-110 transition-transform shrink-0">
+                              <Upload size={20} />
+                            </div>
+                            <div className="text-left sm:text-center">
+                              <span className="text-xs font-black text-blue-700 block">Subir Archivo o Galería</span>
+                              <span className="text-[10px] text-gray-500 font-medium">Fotos guardadas, JPG, PNG o PDF</span>
+                            </div>
+                          </button>
                         </div>
-                        <span className="text-xs font-bold text-brand-primary">Tomar Foto o Subir Archivo</span>
-                        <span className="text-[10px] text-gray-400">JPG, PNG o foto directa desde celular</span>
-                      </button>
+                        <p className="text-[10px] text-center text-gray-400">
+                          En celulares use "Subir Archivo o Galería" para adjuntar comprobantes previamente guardados
+                        </p>
+                      </div>
                     )}
                   </div>
 
@@ -1188,6 +1382,14 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
             </div>
           </div>
         </div>
+      )}
+      {/* Modal Visor Universal de Comprobante (Imágenes y PDFs) */}
+      {archivoVisor && (
+        <ModalVisorComprobante
+          archivo={archivoVisor}
+          onClose={() => setArchivoVisor(null)}
+          titulo="Comprobante de Gasto"
+        />
       )}
     </div>
   );

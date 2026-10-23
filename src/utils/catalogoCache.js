@@ -6,26 +6,36 @@
  */
 
 const TTL_MS = 24 * 60 * 60 * 1000; // 24 horas en milisegundos
+const TTL_SEMANA_MS = 7 * 24 * 60 * 60 * 1000; // 1 semana (7 días) para entidades
 
 // Claves utilizadas en localStorage
 export const CLAVES_CATALOGO = {
   tiposGasto: 'cc_cache_tipogasto',
   subgastos:  'cc_cache_subgasto',
-  entidades:  'cc_cache_entidades',
+  entidades:  'cc_cache_entidades_v4',
   provincias: 'cc_cache_provincias',
   empresas:   'cc_cache_empresas',
+  placas:     'cc_cache_placas',
+  usuarios:   'cc_cache_usuarios_activos_v3',
 };
 
 /**
  * Guarda datos en caché con marca de expiración.
  * Solo persiste si los datos son un array válido.
+ * Por requerimiento institucional, el catálogo de entidades dura 1 semana (7 días).
  * @param {string} clave - Clave del catálogo (de CLAVES_CATALOGO).
  * @param {Array}  datos - Array de objetos a persistir.
+ * @param {number} [ttlPersonalizado] - TTL opcional en milisegundos.
  */
-export const guardarEnCache = (clave, datos) => {
+export const guardarEnCache = (clave, datos, ttlPersonalizado = null) => {
   if (!Array.isArray(datos)) return; // Nunca cachear respuestas de error
-  const entrada = { datos, expira: Date.now() + TTL_MS };
-  localStorage.setItem(clave, JSON.stringify(entrada));
+  const tiempoExpiracion = ttlPersonalizado ?? (clave === CLAVES_CATALOGO.entidades ? TTL_SEMANA_MS : TTL_MS);
+  const entrada = { datos, expira: Date.now() + tiempoExpiracion };
+  try {
+    localStorage.setItem(clave, JSON.stringify(entrada));
+  } catch (err) {
+    console.warn(`[Cache] No se pudo guardar ${clave} en localStorage:`, err);
+  }
 };
 
 /**

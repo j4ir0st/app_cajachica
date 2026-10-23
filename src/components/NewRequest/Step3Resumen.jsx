@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   CheckCircle2,
   User,
@@ -11,9 +11,14 @@ import {
   Clock,
   Send,
   Save,
-  AlertTriangle
+  AlertTriangle,
+  Eye
 } from 'lucide-react';
 import { useCatalogoStore } from '../../store/catalogoStore';
+import { formatearNombreEntidad } from '../../utils/entidades';
+import { esArchivoPdf } from '../../utils/archivoUtil';
+import { obtenerTipoCaja } from '../../utils/tipoCaja';
+import ModalVisorComprobante from '../ModalVisorComprobante';
 
 // ============================================================================
 // COMPONENTE AUXILIAR: FILA DE RESUMEN
@@ -63,6 +68,7 @@ const coincidenUrlsOIds = (url1, url2) => {
  */
 const Step3Resumen = ({ cabecera, detalles, enviando, errorEnvio, onEnviarSolicitud }) => {
   const { tiposGasto, subgastos, entidades, provincias } = useCatalogoStore();
+  const [archivoVisor, setArchivoVisor] = useState(null);
 
   const totalGastos = detalles.reduce((acc, d) => acc + (parseFloat(d.costo) || 0), 0);
   const montoSolicitadoNum = parseFloat(cabecera.monto_solicitado || 0);
@@ -70,6 +76,7 @@ const Step3Resumen = ({ cabecera, detalles, enviando, errorEnvio, onEnviarSolici
   const saldoRestante = montoFinal - totalGastos;
   const tieneSaldoSobrante = saldoRestante > 0.01;
   const totalImagenes = detalles.filter((d) => d.adj_cajachica).length;
+  const tipoCajaGeneral = obtenerTipoCaja({ detalles });
 
   return (
     <div className="space-y-4 animate-fade-in font-outfit pb-4">
@@ -88,9 +95,14 @@ const Step3Resumen = ({ cabecera, detalles, enviando, errorEnvio, onEnviarSolici
 
       {/* Tarjeta de Datos Generales de la Cabecera */}
       <div className="bg-white border border-gray-100 rounded-3xl p-5 shadow-sm space-y-1">
-        <span className="text-[10px] font-black text-brand-primary uppercase tracking-widest block mb-2">
-          Datos de la Solicitud
-        </span>
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-[10px] font-black text-brand-primary uppercase tracking-widest block">
+            Datos de la Solicitud
+          </span>
+          <span className={`text-[9px] sm:text-[10px] font-black uppercase tracking-wider px-2.5 py-0.5 rounded-lg border ${tipoCajaGeneral.claseBadge}`}>
+            {tipoCajaGeneral.etiqueta}
+          </span>
+        </div>
         <FilaResumen icono={User} etiqueta="Solicitante" valor={cabecera.usuario_nombre || '—'} />
         <FilaResumen icono={Building} etiqueta="Área" valor={cabecera.area_nombre || '—'} />
         <FilaResumen icono={Calendar} etiqueta="Fecha" valor={cabecera.fecha_solicitud?.replace('T', ' ') || '—'} />
@@ -153,14 +165,31 @@ const Step3Resumen = ({ cabecera, detalles, enviando, errorEnvio, onEnviarSolici
 
             return (
               <div key={i} className="p-3 rounded-2xl hover:bg-brand-light/30 transition-colors flex items-start gap-3">
-                {det._preview ? (
-                  <img
-                    src={det._preview}
-                    alt="Adjunto"
-                    className="w-12 h-12 rounded-xl object-cover border border-gray-100 shrink-0"
-                  />
+                {det._preview || det.adj_cajachica ? (
+                  <button
+                    type="button"
+                    onClick={() => setArchivoVisor(det._preview || det.adj_cajachica)}
+                    className="group/thumb relative w-12 h-12 rounded-xl overflow-hidden border border-gray-100 shrink-0 hover:opacity-90 transition-opacity bg-white"
+                    title="Ver comprobante completo"
+                  >
+                    {esArchivoPdf(det.adj_cajachica, det._preview) ? (
+                      <div className="w-full h-full bg-red-50 text-red-600 flex flex-col items-center justify-center font-bold">
+                        <FileText size={18} />
+                        <span className="text-[7px] uppercase font-black">PDF</span>
+                      </div>
+                    ) : (
+                      <img
+                        src={det._preview || (typeof det.adj_cajachica === 'string' ? det.adj_cajachica : '')}
+                        alt="Adjunto"
+                        className="w-full h-full object-cover"
+                      />
+                    )}
+                    <div className="absolute inset-0 bg-brand-dark/40 opacity-0 group-hover/thumb:opacity-100 flex items-center justify-center text-white transition-opacity">
+                      <Eye size={14} />
+                    </div>
+                  </button>
                 ) : (
-                  <div className="w-12 h-12 rounded-xl bg-brand-light flex items-center justify-center text-xs font-black text-brand-primary shrink-0">
+                  <div className="w-12 h-12 rounded-xl bg-amber-50 border border-amber-200 flex items-center justify-center text-xs font-black text-amber-600 shrink-0">
                     <Receipt size={18} />
                   </div>
                 )}
@@ -179,12 +208,24 @@ const Step3Resumen = ({ cabecera, detalles, enviando, errorEnvio, onEnviarSolici
                     {det.detalle || 'Sin descripción'}
                   </p>
 
-                  <div className="flex flex-wrap gap-1 mt-1 text-[10px] text-gray-400 font-semibold">
+                  <div className="flex flex-wrap items-center gap-1 mt-1 text-[10px] text-gray-400 font-semibold">
+                    {(() => {
+                      const tipoDet = obtenerTipoCaja(det);
+                      return (
+                        <span className={`px-2 py-0.5 rounded-md font-black text-[9px] uppercase border ${tipoDet.claseBadge}`}>
+                          {tipoDet.etiqueta} {tipoDet.nombreEmpresa !== 'Sin Factura' ? `• ${tipoDet.nombreEmpresa}` : ''}
+                        </span>
+                      );
+                    })()}
+                    {!det.adj_cajachica && !det._preview && (
+                      <span className="text-amber-600 font-bold">⚠️ Sin comprobante</span>
+                    )}
                     <span>{det.fecha_gasto}</span>
                     <span>• {det.lima_provincia === 'L' ? 'Lima' : `Provincia (${prov?.nombre || '—'})`}</span>
                     {det.nro_factura && <span>• Doc: {det.nro_factura}</span>}
-                    {det.placa && <span>• Placa: {det.placa}</span>}
-                    {orig && dest && <span>• Ruta: {orig.sede || orig.nombre} ➔ {dest.sede || dest.nombre}</span>}
+                    {(det.placa_nombre || det.placa) && <span>• Placa: {det.placa_nombre || det.placa}</span>}
+                    {orig && dest && <span>• Ruta: {formatearNombreEntidad(orig)} ➔ {formatearNombreEntidad(dest)}</span>}
+                    {orig && !dest && <span>• Sede: {formatearNombreEntidad(orig)}</span>}
                   </div>
                 </div>
               </div>
@@ -199,11 +240,23 @@ const Step3Resumen = ({ cabecera, detalles, enviando, errorEnvio, onEnviarSolici
         </div>
       </div>
 
-      {/* Indicador de Comprobantes Adjuntos */}
-      <div className="flex items-center gap-2.5 bg-emerald-50 border border-emerald-200/60 text-emerald-700 text-xs font-bold rounded-2xl p-3.5">
-        <CheckCircle2 size={16} className="shrink-0" />
-        <span>Se enviarán {totalImagenes} foto(s)/ticket(s) adjuntos al requerimiento.</span>
-      </div>
+      {/* Indicador de Comprobantes Adjuntos o Aviso de Pendientes */}
+      {detalles.some((d) => !d.adj_cajachica && !d._preview) ? (
+        <div className="flex items-start gap-2.5 bg-amber-50 border border-amber-300 text-amber-800 text-xs font-bold rounded-2xl p-3.5">
+          <AlertTriangle size={18} className="shrink-0 mt-0.5 text-amber-600" />
+          <div>
+            <p className="font-black">Comprobantes pendientes de adjuntar ({detalles.filter((d) => !d.adj_cajachica && !d._preview).length})</p>
+            <p className="text-[11px] font-medium text-amber-700 mt-0.5 leading-snug">
+              Tiene gastos guardados sin foto o archivo. Puede guardar su solicitud como <strong>Borrador</strong>, pero para <strong>Enviar y Liquidar</strong> se debe actualizar el registro con el adjunto correspondiente.
+            </p>
+          </div>
+        </div>
+      ) : (
+        <div className="flex items-center gap-2.5 bg-emerald-50 border border-emerald-200/60 text-emerald-700 text-xs font-bold rounded-2xl p-3.5">
+          <CheckCircle2 size={16} className="shrink-0" />
+          <span>Se enviarán {totalImagenes} foto(s)/ticket(s) adjuntos al requerimiento.</span>
+        </div>
+      )}
 
       {/* Botones de Acción en el Paso 3 */}
       <div className="pt-2 grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -238,6 +291,14 @@ const Step3Resumen = ({ cabecera, detalles, enviando, errorEnvio, onEnviarSolici
           <div className="w-5 h-5 border-3 border-brand-primary border-t-transparent rounded-full animate-spin" />
           <span className="text-xs font-bold text-brand-primary">Procesando solicitud y comprobantes...</span>
         </div>
+      )}
+      {/* Modal Visor Universal de Comprobante (Imágenes y PDFs) */}
+      {archivoVisor && (
+        <ModalVisorComprobante
+          archivo={archivoVisor}
+          onClose={() => setArchivoVisor(null)}
+          titulo="Comprobante de Gasto"
+        />
       )}
     </div>
   );

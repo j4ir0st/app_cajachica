@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import {
   FileCheck,
@@ -20,12 +21,14 @@ import {
   X,
   Copy,
   TrendingUp,
-  ShieldAlert,
-  Send
+  Send,
+  FileText
 } from 'lucide-react';
 import { useUserStore } from '../store/userStore';
 import { fetchAuth, extraerMensajeError } from '../utils/fetchAuth';
 import { obtenerTipoCaja } from '../utils/tipoCaja';
+import { esArchivoPdf } from '../utils/archivoUtil';
+import ModalVisorComprobante from '../components/ModalVisorComprobante';
 import Toast from '../components/Toast';
 
 const API_URL = import.meta.env.DEV ? '' : (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
@@ -63,6 +66,7 @@ const Aprobaciones = () => {
 
   // Filtros y Búsqueda
   const [busqueda, setBusqueda] = useState('');
+  const [buscandoRemoto, setBuscandoRemoto] = useState(false);
 
   // Modal de Auditoría y Visor de Imagen
   const [solicitudAuditoria, setSolicitudAuditoria] = useState(null);
@@ -127,17 +131,20 @@ const Aprobaciones = () => {
     if (!busqueda.trim()) return solicitudes;
 
     const query = busqueda.toLowerCase().trim();
+    const querySinHash = query.replace(/^#/, '');
     return solicitudes.filter((req) => {
       const idTexto = String(req.id || '').toLowerCase();
       const solicitanteTexto = obtenerNombreSolicitante(req.usuario_id).toLowerCase();
       const obsTexto = (req.obs || '').toLowerCase();
       const areaTexto = String(req.area_id || '').toLowerCase();
       const detallesTexto = (req.detalle || req.detalles || [])
-        .map((d) => `${d.detalle || ''} ${d.nro_factura || ''} ${d.nro_ruc || ''} ${d.placa || ''} ${d.subgasto_id?.nombre || ''}`)
+        .map((d) => `${d.detalle || ''} ${d.nro_factura || ''} ${d.nro_ruc || ''} ${d.placa_nombre || d.placa || ''} ${d.subgasto_id?.nombre || ''}`)
         .join(' ')
         .toLowerCase();
 
       return (
+        idTexto === querySinHash ||
+        idTexto.includes(querySinHash) ||
         idTexto.includes(query) ||
         solicitanteTexto.includes(query) ||
         obsTexto.includes(query) ||
@@ -146,6 +153,63 @@ const Aprobaciones = () => {
       );
     });
   }, [solicitudes, busqueda]);
+
+  // Búsqueda Inteligente: En memoria primero; si no hay coincidencias o se busca por ID no cargado, consultar BD
+  useEffect(() => {
+    const termino = busqueda.trim();
+    if (!termino) {
+      setBuscandoRemoto(false);
+      return;
+    }
+
+    const idLimpio = termino.replace(/^#/, '').trim();
+    const esIdNumerico = /^\d+$/.test(idLimpio);
+    const idEncontradoEnMemoria = esIdNumerico && solicitudes.some((s) => String(s.id) === idLimpio);
+
+    // Si ya existe en memoria el ID o la búsqueda de texto ya tiene resultados locales, evitar consultar a la BD
+    if (idEncontradoEnMemoria) return;
+    if (!esIdNumerico && solicitudesFiltradas.length > 0) return;
+
+    const temporizador = setTimeout(async () => {
+      setBuscandoRemoto(true);
+      try {
+        if (esIdNumerico) {
+          const res = await fetchAuth(`${API_URL}/Requerimiento_CajaChica/${idLimpio}/?format=json`);
+          if (res.ok) {
+            const req = await res.json();
+            setSolicitudes((prev) => {
+              const existe = prev.some((s) => s.id === req.id);
+              return existe ? prev : [req, ...prev];
+            });
+          }
+        } else {
+          const params = new URLSearchParams({
+            format: 'json',
+            estado_requerimiento: 'LQ',
+            search: termino,
+          });
+          const res = await fetchAuth(`${API_URL}/Requerimiento_CajaChica/?${params.toString()}`);
+          if (res.ok) {
+            const data = await res.json();
+            const lista = data.results ?? (Array.isArray(data) ? data : []);
+            if (lista.length > 0) {
+              setSolicitudes((prev) => {
+                const idsExistentes = new Set(prev.map((s) => s.id));
+                const nuevos = lista.filter((s) => !idsExistentes.has(s.id));
+                return nuevos.length > 0 ? [...prev, ...nuevos] : prev;
+              });
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('[Aprobaciones] Búsqueda remota sin resultados:', err.message);
+      } finally {
+        setBuscandoRemoto(false);
+      }
+    }, 400);
+
+    return () => clearTimeout(temporizador);
+  }, [busqueda, solicitudes.length, solicitudesFiltradas.length]);
 
   // ============================================================================
   // TOTALES Y KPIS DE AUDITORÍA
@@ -280,7 +344,14 @@ const Aprobaciones = () => {
             if (det.provincia_id?.url) formDataDetalle.append('provincia_id', det.provincia_id.url);
             if (det.nro_factura) formDataDetalle.append('nro_factura', det.nro_factura);
             if (det.nro_ruc) formDataDetalle.append('nro_ruc', det.nro_ruc);
-            if (det.placa) formDataDetalle.append('placa', det.placa);
+            const empVal = det.empresa_id?.url || (typeof det.empresa_id === 'string' && det.empresa_id.startsWith('http') ? det.empresa_id : (det.empresa_id ? `${API_URL}/Empresa/${det.empresa_id}/` : null));
+            if (empVal) formDataDetalle.append('empresa_id', empVal);
+            const placaVal = det.placa_id?.url || (typeof det.placa_id === 'string' && det.placa_id.startsWith('http') ? det.placa_id : (det.placa_id ? `${API_URL}/RC_Placas/${det.placa_id}/` : null));
+            if (placaVal) {
+              formDataDetalle.append('placa_id', placaVal);
+            } else if (det.placa) {
+              formDataDetalle.append('placa', det.placa);
+            }
             if (det.origen?.url) formDataDetalle.append('origen', det.origen.url);
             if (det.destino?.url) formDataDetalle.append('destino', det.destino.url);
             formDataDetalle.append('costo', String(det.costo || '0'));
@@ -408,8 +479,14 @@ const Aprobaciones = () => {
             placeholder="Buscar por ID, solicitante, factura, motivo o placa..."
             value={busqueda}
             onChange={(e) => setBusqueda(e.target.value)}
-            className="w-full bg-brand-light/40 border border-gray-100 focus:border-brand-primary rounded-xl pl-9 pr-8 py-1.5 text-xs font-bold text-brand-dark outline-none transition-colors placeholder:text-gray-400 placeholder:font-normal"
+            className="w-full bg-brand-light/40 border border-gray-100 focus:border-brand-primary rounded-xl pl-9 pr-24 py-1.5 text-xs font-bold text-brand-dark outline-none transition-colors placeholder:text-gray-400 placeholder:font-normal"
           />
+          {buscandoRemoto && (
+            <div className="absolute right-8 top-1/2 -translate-y-1/2 flex items-center gap-1 text-[10px] font-bold text-brand-primary">
+              <RefreshCw size={11} className="animate-spin" />
+              <span className="hidden sm:inline">Consultando BD...</span>
+            </div>
+          )}
           {busqueda && (
             <button
               onClick={() => setBusqueda('')}
@@ -569,9 +646,15 @@ const Aprobaciones = () => {
       {/* ========================================================================
           MODAL DETALLE COMPLETO DE AUDITORÍA Y COMPROBANTES
          ======================================================================== */}
-      {solicitudAuditoria && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-brand-dark/70 backdrop-blur-sm p-3 sm:p-4 overflow-y-auto">
-          <div className="bg-white rounded-3xl w-full max-w-2xl shadow-2xl border border-gray-100 flex flex-col max-h-[92vh] overflow-hidden animate-scale-up">
+      {solicitudAuditoria && createPortal(
+        <div
+          className="fixed inset-0 !m-0 z-50 flex items-center justify-center bg-brand-dark/70 backdrop-blur-sm p-3 sm:p-4 overflow-y-auto"
+          onClick={() => setSolicitudAuditoria(null)}
+        >
+          <div
+            className="bg-white rounded-3xl w-full max-w-2xl shadow-2xl border border-gray-100 flex flex-col max-h-[92vh] overflow-hidden animate-scale-up"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="px-5 py-3.5 bg-white border-b border-gray-100 flex items-center justify-between shrink-0">
               <div>
                 <div className="flex items-center gap-2">
@@ -644,10 +727,17 @@ const Aprobaciones = () => {
                             <button
                               type="button"
                               onClick={() => setImagenModal(det.adj_cajachica)}
-                              className="group/img relative w-14 h-14 rounded-xl overflow-hidden border border-gray-200 shrink-0 hover:opacity-90 transition-opacity"
-                              title="Ver comprobante en grande"
+                              className="group/img relative w-14 h-14 rounded-xl overflow-hidden border border-gray-200 shrink-0 hover:opacity-90 transition-opacity bg-white"
+                              title="Ver comprobante completo"
                             >
-                              <img src={det.adj_cajachica} alt="Comprobante" className="w-full h-full object-cover" />
+                              {esArchivoPdf(det.adj_cajachica) ? (
+                                <div className="w-full h-full bg-red-50 text-red-600 flex flex-col items-center justify-center font-bold">
+                                  <FileText size={20} />
+                                  <span className="text-[8px] font-black uppercase tracking-wider mt-0.5">PDF</span>
+                                </div>
+                              ) : (
+                                <img src={det.adj_cajachica} alt="Comprobante" className="w-full h-full object-cover" />
+                              )}
                               <div className="absolute inset-0 bg-brand-dark/40 opacity-0 group-hover/img:opacity-100 flex items-center justify-center text-white transition-opacity">
                                 <Eye size={15} />
                               </div>
@@ -680,12 +770,20 @@ const Aprobaciones = () => {
                       </div>
 
                       <div className="flex flex-wrap gap-1 text-[10px] text-gray-500 font-semibold pt-1 border-t border-gray-50">
+                        {(() => {
+                          const tipoDet = obtenerTipoCaja(det);
+                          return (
+                            <span className={`px-2 py-0.5 rounded-md font-black text-[9px] uppercase border ${tipoDet.claseBadge}`}>
+                              {tipoDet.etiqueta} {tipoDet.nombreEmpresa !== 'Sin Factura' ? `• ${tipoDet.nombreEmpresa}` : ''}
+                            </span>
+                          );
+                        })()}
                         <span className="px-2 py-0.5 bg-gray-50 rounded-md">
                           {det.lima_provincia === 'L' ? 'Lima' : 'Provincia'}
                         </span>
                         {det.nro_factura && <span className="px-2 py-0.5 bg-gray-50 rounded-md">Doc: {det.nro_factura}</span>}
                         {det.nro_ruc && <span className="px-2 py-0.5 bg-gray-50 rounded-md">RUC: {det.nro_ruc}</span>}
-                        {det.placa && <span className="px-2 py-0.5 bg-amber-50 text-amber-700 rounded-md">Placa: {det.placa}</span>}
+                        {(det.placa_nombre || det.placa) && <span className="px-2 py-0.5 bg-amber-50 text-amber-700 rounded-md">Placa: {det.placa_nombre || det.placa}</span>}
                       </div>
                     </div>
                   );
@@ -728,15 +826,22 @@ const Aprobaciones = () => {
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* ========================================================================
           MODAL DE CONFIRMACIÓN PARA POSTERGAR A SIGUIENTE SEMANA
          ======================================================================== */}
-      {modalPostergar && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-brand-dark/70 backdrop-blur-sm p-4 animate-fade-in">
-          <div className="bg-white rounded-3xl w-full max-w-md shadow-2xl border border-gray-100 p-6 space-y-3.5 animate-scale-up">
+      {modalPostergar && createPortal(
+        <div
+          className="fixed inset-0 !m-0 z-50 flex items-center justify-center bg-brand-dark/70 backdrop-blur-sm p-4 animate-fade-in"
+          onClick={() => setModalPostergar(null)}
+        >
+          <div
+            className="bg-white rounded-3xl w-full max-w-md shadow-2xl border border-gray-100 p-6 space-y-3.5 animate-scale-up"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="w-12 h-12 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center mx-auto">
               <RotateCcw size={24} />
             </div>
@@ -781,15 +886,22 @@ const Aprobaciones = () => {
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* ========================================================================
           MODAL DE CONFIRMACIÓN PARA RECHAZAR / DEVOLVER
          ======================================================================== */}
-      {modalRechazo && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-brand-dark/70 backdrop-blur-sm p-4 animate-fade-in">
-          <div className="bg-white rounded-3xl w-full max-w-md shadow-2xl border border-gray-100 p-6 space-y-3.5 animate-scale-up">
+      {modalRechazo && createPortal(
+        <div
+          className="fixed inset-0 !m-0 z-50 flex items-center justify-center bg-brand-dark/70 backdrop-blur-sm p-4 animate-fade-in"
+          onClick={() => setModalRechazo(null)}
+        >
+          <div
+            className="bg-white rounded-3xl w-full max-w-md shadow-2xl border border-gray-100 p-6 space-y-3.5 animate-scale-up"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="w-12 h-12 rounded-2xl bg-red-50 text-red-600 flex items-center justify-center mx-auto">
               <ShieldAlert size={24} />
             </div>
@@ -834,32 +946,19 @@ const Aprobaciones = () => {
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* ========================================================================
-          VISOR DE IMAGEN A PANTALLA COMPLETA
+          VISOR UNIVERSAL DE COMPROBANTE (IMÁGENES Y PDFS)
          ======================================================================== */}
       {imagenModal && (
-        <div
-          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/90 p-4 animate-fade-in"
-          onClick={() => setImagenModal(null)}
-        >
-          <div className="relative max-w-3xl max-h-[90vh] flex flex-col items-center">
-            <button
-              type="button"
-              onClick={() => setImagenModal(null)}
-              className="absolute -top-10 right-0 text-white p-2 rounded-full hover:bg-white/20 transition-colors"
-            >
-              <X size={24} />
-            </button>
-            <img
-              src={imagenModal}
-              alt="Comprobante en alta resolución"
-              className="max-w-full max-h-[85vh] object-contain rounded-2xl shadow-2xl"
-            />
-          </div>
-        </div>
+        <ModalVisorComprobante
+          archivo={imagenModal}
+          onClose={() => setImagenModal(null)}
+          titulo="Comprobante de Gasto"
+        />
       )}
     </div>
   );

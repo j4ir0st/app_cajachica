@@ -74,7 +74,7 @@ const ESTADOS_MAPA = {
  */
 const esRolGestion = (usuario) => {
   if (!usuario) return false;
-  if (usuario.is_staff) return true;
+  if (usuario.is_superuser || usuario.is_staff) return true;
   const puesto = (usuario.puesto || '').toLowerCase();
   return ['gerente', 'jefe', 'coordinador', 'supervisor', 'planner', 'administrador', 'admin'].some((r) =>
     puesto.includes(r)

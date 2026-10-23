@@ -20,6 +20,7 @@ export const MAPA_TIPOS_CAJA = {
   A: {
     tipo: 'A',
     etiqueta: 'TIPO: A',
+    etiquetaCabecera: 'Factura a Nombre de Surgicorp',
     nombreEmpresa: 'Surgicorp SRL',
     empresaId: 1,
     claseBadge: 'bg-red-50 text-red-600 border-red-200',
@@ -29,6 +30,7 @@ export const MAPA_TIPOS_CAJA = {
   B: {
     tipo: 'B',
     etiqueta: 'TIPO: B',
+    etiquetaCabecera: 'Factura a Nombre de RR Medical',
     nombreEmpresa: 'RR MEDICAL SRL',
     empresaId: 4,
     claseBadge: 'bg-blue-50 text-blue-600 border-blue-200',
@@ -38,6 +40,7 @@ export const MAPA_TIPOS_CAJA = {
   C: {
     tipo: 'C',
     etiqueta: 'TIPO: C',
+    etiquetaCabecera: 'No Requiere Factura',
     nombreEmpresa: 'Sin Factura',
     empresaId: null,
     claseBadge: 'bg-amber-50 text-amber-700 border-amber-200',
@@ -47,6 +50,7 @@ export const MAPA_TIPOS_CAJA = {
   D: {
     tipo: 'D',
     etiqueta: 'TIPO: D',
+    etiquetaCabecera: 'Factura a Nombre de Mackensy Medical',
     nombreEmpresa: 'MCKINSEY MEDICA S.R.L.',
     empresaId: 3,
     claseBadge: 'bg-purple-50 text-purple-600 border-purple-200',
@@ -56,6 +60,7 @@ export const MAPA_TIPOS_CAJA = {
   E: {
     tipo: 'E',
     etiqueta: 'TIPO: E',
+    etiquetaCabecera: 'Factura a Nombre de Biopro Perú',
     nombreEmpresa: 'BIOPRO PERU S.R.L.',
     empresaId: 2,
     claseBadge: 'bg-emerald-50 text-emerald-600 border-emerald-200',
@@ -103,25 +108,49 @@ export const resolverClaveTipoIndividual = (detOId) => {
 
 /**
  * Obtiene el objeto de Tipo de Caja.
- * Si recibe un requerimiento con lista de comprobantes, analiza qué tipo de caja
- * predomina en mayor cantidad en sus detalles y asigna ese tipo al registro principal.
- * Si recibe un detalle individual o un ID de empresa, devuelve su tipo directo.
+ * - Para la tarjeta general / encabezado del requerimiento: muestra el nombre completo de facturación.
+ * - Para los detalles de gasto: mantiene la nomenclatura individual tipo 'TIPO: A'.
  * @param {Object|number|string} reqOId - Requerimiento, detalle o ID de la empresa.
+ * @param {boolean|null} esDetalle - Forzar si se trata de un detalle individual (true) o cabecera (false).
  * @returns {Object} Objeto con tipo, etiqueta, nombreEmpresa, claseBadge, etc.
  */
-export const obtenerTipoCaja = (reqOId) => {
-  if (!reqOId) return MAPA_TIPOS_CAJA.C;
+export const obtenerTipoCaja = (reqOId, esDetalle = null) => {
+  if (!reqOId) {
+    const baseC = MAPA_TIPOS_CAJA.C;
+    return {
+      ...baseC,
+      etiqueta: esDetalle ? baseC.etiqueta : baseC.etiquetaCabecera,
+      etiquetaDetalle: baseC.etiqueta,
+      etiquetaGeneral: baseC.etiquetaCabecera,
+    };
+  }
+
+  // Detección automática: Es detalle si es número, string o tiene 'costo' / 'subgasto_url' / 'subgasto_id'
+  const esDetalleCalculado = esDetalle !== null
+    ? esDetalle
+    : (
+        typeof reqOId === 'number' ||
+        typeof reqOId === 'string' ||
+        (typeof reqOId === 'object' && reqOId !== null && (
+          'costo' in reqOId ||
+          'subgasto_url' in reqOId ||
+          'subgasto_id' in reqOId ||
+          'tipogasto_url' in reqOId
+        ))
+      );
+
+  let clave = 'C';
 
   // Si es un objeto requerimiento que posee un arreglo de detalles
-  if (typeof reqOId === 'object' && reqOId !== null) {
+  if (typeof reqOId === 'object' && reqOId !== null && !esDetalleCalculado) {
     const listaDetalles = reqOId.detalle || reqOId.detalles;
     if (Array.isArray(listaDetalles) && listaDetalles.length > 0) {
       const conteo = { A: 0, B: 0, C: 0, D: 0, E: 0 };
 
       listaDetalles.forEach((det) => {
-        const clave = resolverClaveTipoIndividual(det);
-        if (conteo[clave] !== undefined) {
-          conteo[clave]++;
+        const c = resolverClaveTipoIndividual(det);
+        if (conteo[c] !== undefined) {
+          conteo[c]++;
         } else {
           conteo.C++;
         }
@@ -139,12 +168,21 @@ export const obtenerTipoCaja = (reqOId) => {
           tipoGanador = t;
         }
       }
-
-      return MAPA_TIPOS_CAJA[tipoGanador] || MAPA_TIPOS_CAJA.C;
+      clave = tipoGanador;
+    } else {
+      clave = resolverClaveTipoIndividual(reqOId);
     }
+  } else {
+    // Si es un detalle individual o un ID numérico/string directo
+    clave = resolverClaveTipoIndividual(reqOId);
   }
 
-  // Si es un detalle individual o un ID numérico/string directo
-  const claveIndividual = resolverClaveTipoIndividual(reqOId);
-  return MAPA_TIPOS_CAJA[claveIndividual] || MAPA_TIPOS_CAJA.C;
+  const base = MAPA_TIPOS_CAJA[clave] || MAPA_TIPOS_CAJA.C;
+
+  return {
+    ...base,
+    etiqueta: esDetalleCalculado ? base.etiqueta : base.etiquetaCabecera,
+    etiquetaDetalle: base.etiqueta,
+    etiquetaGeneral: base.etiquetaCabecera,
+  };
 };

@@ -3,24 +3,34 @@ import { DollarSign, FileText, Info, ChevronDown, Users, Building } from 'lucide
 import { useUserStore } from '../../store/userStore';
 import { useCatalogoStore } from '../../store/catalogoStore';
 import { fetchAuth } from '../../utils/fetchAuth';
+import { CLAVES_CATALOGO, guardarEnCache, leerDeCache } from '../../utils/catalogoCache';
 import { obtenerTipoCaja, LISTA_EMPRESAS } from '../../utils/tipoCaja';
+import Combobox from '../Combobox';
 
 const API_URL = import.meta.env.DEV ? '' : import.meta.env.VITE_API_URL;
 
-// Puestos con permisos ampliados para elegir solicitante de su área
-const PUESTOS_SUPERVISORES = ['coordinador', 'supervisor', 'jefe', 'gerente'];
-
 /**
- * Determina si el puesto del usuario le permite seleccionar el solicitante.
+ * Funciones utilitarias para extraer el nombre de puesto y área:
+ * - Para tabla users (serializer): siempre es u.puesto_id.nombre y u.area_id.nombre.
+ * - Para respuesta de login (usuario logueado): viene personalizado como string en user.puesto y user.area_id.
  */
-const esSupervisor = (puesto) =>
-  PUESTOS_SUPERVISORES.some((p) => puesto?.toLowerCase().includes(p));
+export const extraerPuesto = (u) => {
+  if (!u) return '';
+  return u.puesto_id?.nombre || u.puesto || '';
+};
+
+export const extraerArea = (u) => {
+  if (!u) return '';
+  return u.area_id?.nombre || (typeof u.area_id === 'string' ? u.area_id : '');
+};
 
 /**
  * Paso 1: Datos de cabecera del requerimiento.
- * - Supervisores/Jefes/Gerentes pueden elegir el solicitante de su área.
- * - El campo observaciones solo es visible para supervisores.
- * - La fecha toma la hora actual y permite al usuario modificarla.
+ * - Gerentes y Superusuarios ven a todos los usuarios activos de Surgicorp con subtítulo (Área - Puesto).
+ * - Jefes, Coordinadores y Supervisores ven a los usuarios activos de su área (vía area_id) sin subtítulo.
+ * - Usuarios operativos solo pueden solicitar para sí mismos.
+ * - La consulta se realiza con top=1000 e is_active=true (omite inactivos).
+ * - La fecha toma la hora actual y permite modificarla.
  * - Permite elegir la empresa de SI_Empresas para definir el Tipo de Caja (A, B, C, D, E).
  * @param {Object} datos - Estado actual del formulario maestro.
  * @param {Function} onChange - Callback para actualizar el estado maestro.
@@ -28,7 +38,25 @@ const esSupervisor = (puesto) =>
 const Step1Cabecera = ({ datos, onChange }) => {
   const { user, updateUser } = useUserStore();
   const { empresas } = useCatalogoStore();
-  const esSup = esSupervisor(user?.puesto);
+
+  // Roles según el campo puesto del usuario logueado (en login viene directo en user.puesto)
+  const puestoLower = (user?.puesto || '').toLowerCase().trim();
+
+  // 1. Gerente o Superusuario: Ve TODOS los usuarios activos y ve el subtítulo de área y puesto
+  const esGerenteOSuperuser = Boolean(
+    user?.is_superuser || puestoLower.includes('gerente')
+  );
+
+  // 2. Jefe, Coordinador o Supervisor (y Administrador / is_staff): Ve los usuarios de su área (sin subtítulo)
+  const esMandoArea = Boolean(
+    puestoLower.includes('jefe') ||
+    puestoLower.includes('coordinador') ||
+    puestoLower.includes('supervisor') ||
+    user?.is_staff
+  );
+
+  // Puede elegir solicitante si tiene cualquiera de estos roles
+  const puedeElegirSolicitante = esGerenteOSuperuser || esMandoArea;
 
   const listaEmpresasDisponibles = useMemo(() => {
     if (Array.isArray(empresas) && empresas.length > 0) {
@@ -52,11 +80,10 @@ const Step1Cabecera = ({ datos, onChange }) => {
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
   });
 
-  const [usuariosArea, setUsuariosArea] = useState([]);
+  const [todosUsuarios, setTodosUsuarios] = useState([]);
   const [cargandoUsuarios, setCargandoUsuarios] = useState(false);
 
-  // Pre-poblar datos del usuario autenticado al montar.
-  // Si el store no tiene las URLs (sesión antigua), las obtiene de la API.
+  // Pre-poblar datos del usuario autenticado al montar
   useEffect(() => {
     if (!user || datos.usuario_id) return;
 
@@ -64,14 +91,12 @@ const Step1Cabecera = ({ datos, onChange }) => {
       let usuarioUrl = user.url || null;
       let areaUrl = user.area_url || null;
 
-      // Recuperar URLs si no están en el store (sesión iniciada antes del cambio)
       if (!usuarioUrl || !areaUrl) {
         try {
           const res = await fetchAuth(`${API_URL}/users/${user.id}/?format=json`);
           const data = await res.json();
           usuarioUrl = data.url || null;
           areaUrl = data.area_id?.url || null;
-          // Persistir en el store para no repetir el fetch la próxima vez
           updateUser({ url: usuarioUrl, area_url: areaUrl });
         } catch {
           console.warn('No se pudo recuperar la URL de perfil del usuario.');
@@ -83,8 +108,9 @@ const Step1Cabecera = ({ datos, onChange }) => {
         usuario_url: usuarioUrl,
         area_id: user.area_id,
         area_url: areaUrl,
-        area_nombre: user.area,
+        area_nombre: user.area_id,
         usuario_nombre: user.nombre,
+        usuario_puesto: user.puesto,
         fecha_solicitud: ahora,
       });
     };
@@ -92,41 +118,124 @@ const Step1Cabecera = ({ datos, onChange }) => {
     inicializarConUrl();
   }, []);
 
-  // Si es supervisor, carga los usuarios de su área de manera asíncrona
+  // Cargar usuarios activos con top=1000 e is_active=true (con soporte de caché y paginación)
   useEffect(() => {
-    if (!esSup || !user?.area) return;
-    const cargarUsuariosArea = async () => {
+    if (!puedeElegirSolicitante) return;
+
+    const cargarUsuariosActivos = async () => {
       setCargandoUsuarios(true);
       try {
-        const res = await fetchAuth(
-          `${API_URL}/users/?format=json&area_nombre=${encodeURIComponent(user.area)}`
-        );
-        const data = await res.json();
-        const lista = data.results ?? data;
-        // Se guarda tanto id, nombre como la URL hyperlinked de cada usuario
-        setUsuariosArea(lista.map((u) => ({
-          id: u.id,
-          url: u.url || null,
-          nombre: `${u.first_name} ${u.last_name}`.trim() || u.username,
-        })));
-      } catch {
-        setUsuariosArea([]);
+        // 1. Revisar caché persistente
+        const enCache = leerDeCache(CLAVES_CATALOGO.usuarios);
+        if (enCache && Array.isArray(enCache) && enCache.length > 0) {
+          setTodosUsuarios(enCache);
+          setCargandoUsuarios(false);
+          return;
+        }
+
+        // 2. Fetch con top=1000 e is_active=true
+        let urlPeticion = `${API_URL}/users/?format=json&is_active=true&top=1000`;
+        let listaTotal = [];
+
+        while (urlPeticion) {
+          const res = await fetchAuth(urlPeticion);
+          if (!res.ok) throw new Error(`Error ${res.status} al cargar usuarios`);
+          const data = await res.json();
+          const items = data.results ?? (Array.isArray(data) ? data : []);
+          listaTotal = [...listaTotal, ...items];
+          urlPeticion = data.next || null;
+        }
+
+        guardarEnCache(CLAVES_CATALOGO.usuarios, listaTotal);
+        setTodosUsuarios(listaTotal);
+      } catch (err) {
+        console.error('Error al cargar catálogo de usuarios:', err);
+        setTodosUsuarios([]);
       } finally {
         setCargandoUsuarios(false);
       }
     };
-    cargarUsuariosArea();
-  }, [esSup, user?.area]);
+
+    cargarUsuariosActivos();
+  }, [puedeElegirSolicitante]);
+
+  // Filtrado de usuarios según rol:
+  // - Gerente / Superuser: todos los usuarios activos (>70 empleados)
+  // - Jefe / Coordinador / Supervisor / Staff: solo los de su área (vía area_id.nombre con user.area_id)
+  const usuariosDisponibles = useMemo(() => {
+    if (!todosUsuarios || todosUsuarios.length === 0) return [];
+
+    if (esGerenteOSuperuser) {
+      return todosUsuarios;
+    }
+
+    if (esMandoArea) {
+      const miAreaNombre = (user?.area_id || '').toLowerCase().trim();
+
+      return todosUsuarios.filter((u) => {
+        // En users serializer el área siempre es u.area_id.nombre
+        const uAreaNombre = (u.area_id?.nombre || '').toLowerCase().trim();
+
+        if (miAreaNombre && uAreaNombre && miAreaNombre === uAreaNombre) {
+          return true;
+        }
+
+        if (String(u.id) === String(user?.id)) return true;
+
+        return false;
+      });
+    }
+
+    return [];
+  }, [todosUsuarios, esGerenteOSuperuser, esMandoArea, user]);
+
+  // Opciones para el Combobox:
+  // Subtítulo con "Área - Puesto" visible ÚNICAMENTE si el usuario logueado es Gerente o Superusuario
+  const opcionesUsuarios = useMemo(() => {
+    return usuariosDisponibles
+      .map((u) => {
+        const nombreCompleto =
+          u.full_name ||
+          `${u.first_name || ''} ${u.last_name || ''}`.trim() ||
+          u.username ||
+          `Usuario #${u.id}`;
+
+        // El área siempre es area_id.nombre y el puesto puesto_id.nombre para users serializer
+        const nombreArea = u.area_id?.nombre || '';
+        const nombrePuesto = u.puesto_id?.nombre || '';
+        const subtituloAreaPuesto = [nombreArea, nombrePuesto].filter(Boolean).join(' - ');
+
+        return {
+          value: u.id,
+          label: nombreCompleto,
+          // Indicador de área y puesto como subtítulo solo visible para Gerente o Superusuario
+          sublabel: esGerenteOSuperuser ? (subtituloAreaPuesto || null) : null,
+          busquedaExtra: subtituloAreaPuesto,
+          url: u.url || `${API_URL}/users/${u.id}/`,
+          area_id: u.area_id?.id || u.area_id,
+          area_url: u.area_id?.url || null,
+          area_nombre: nombreArea,
+          puesto_nombre: nombrePuesto,
+        };
+      })
+      .sort((a, b) => a.label.localeCompare(b.label, 'es', { sensitivity: 'base' }));
+  }, [usuariosDisponibles, esGerenteOSuperuser]);
 
   const manejarCambio = (campo, valor) => onChange({ [campo]: valor });
 
   const manejarSolicitante = (usuarioId) => {
-    const seleccionado = usuariosArea.find((u) => String(u.id) === String(usuarioId));
+    const seleccionado = opcionesUsuarios.find((opt) => String(opt.value) === String(usuarioId));
     if (seleccionado) {
       onChange({
-        usuario_id: seleccionado.id,
-        usuario_url: seleccionado.url,   // URL hyperlinked para el POST
-        usuario_nombre: seleccionado.nombre,
+        usuario_id: seleccionado.value,
+        usuario_url: seleccionado.url,
+        usuario_nombre: seleccionado.label,
+        usuario_puesto: seleccionado.puesto_nombre,
+        ...(seleccionado.area_nombre ? {
+          area_id: seleccionado.area_id || user.area_id,
+          area_url: seleccionado.area_url || user.area_url,
+          area_nombre: seleccionado.area_nombre || user.area_id,
+        } : {})
       });
     }
   };
@@ -146,35 +255,42 @@ const Step1Cabecera = ({ datos, onChange }) => {
         </div>
       )}
 
-      {/* Área (siempre solo lectura) y Solicitante */}
+      {/* Área (solo lectura del requerimiento) y Solicitante */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         <div>
           <label className="block text-xs font-black text-brand-dark uppercase tracking-widest mb-2">Área</label>
           <div className="bg-brand-light border border-gray-100 rounded-2xl px-4 py-3 text-sm font-semibold text-gray-500 flex items-center gap-2">
             <Info size={15} className="text-brand-primary shrink-0" />
-            {user?.area_id || '—'}
+            {datos.area_nombre || datos.area_id || user?.area_id || '—'}
           </div>
         </div>
 
         <div>
           <label className="block text-xs font-black text-brand-dark uppercase tracking-widest mb-2">
-            {esSup ? <span className="flex items-center gap-1.5"><Users size={13} className="text-brand-primary" />Solicitante</span> : 'Solicitante'}
+            {puedeElegirSolicitante ? (
+              <span className="flex items-center gap-1.5">
+                <Users size={13} className="text-brand-primary" />
+                Solicitante
+                {esGerenteOSuperuser && (
+                  <span className="text-[10px] font-bold text-gray-400 lowercase">
+                    ({opcionesUsuarios.length} activos)
+                  </span>
+                )}
+              </span>
+            ) : (
+              'Solicitante'
+            )}
           </label>
-          {esSup ? (
-            <div className="relative">
-              <select
-                value={datos.usuario_id || ''}
-                onChange={(e) => manejarSolicitante(e.target.value)}
-                disabled={cargandoUsuarios}
-                className="w-full appearance-none bg-white border-2 border-gray-100 focus:border-brand-primary rounded-2xl px-4 py-3 text-sm font-semibold text-brand-dark outline-none transition-colors disabled:opacity-60"
-              >
-                {cargandoUsuarios
-                  ? <option>Cargando...</option>
-                  : usuariosArea.map((u) => <option key={u.id} value={u.id}>{u.nombre}</option>)
-                }
-              </select>
-              <ChevronDown size={14} className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none" />
-            </div>
+          {puedeElegirSolicitante ? (
+            <Combobox
+              options={opcionesUsuarios}
+              value={datos.usuario_id}
+              onChange={(val) => manejarSolicitante(val)}
+              placeholder={cargandoUsuarios ? 'Cargando colaboradores...' : 'Seleccione o busque solicitante...'}
+              disabled={cargandoUsuarios}
+              minParaBusqueda={6}
+              icon={<Users size={14} className="text-brand-primary" />}
+            />
           ) : (
             <div className="bg-brand-light border border-gray-100 rounded-2xl px-4 py-3 text-sm font-semibold text-gray-500 flex items-center gap-2">
               <Info size={15} className="text-brand-primary shrink-0" />
@@ -216,7 +332,7 @@ const Step1Cabecera = ({ datos, onChange }) => {
       </div>
 
       {/* Observaciones — solo visible para supervisores/jefes/gerentes */}
-      {esSup && (
+      {puedeElegirSolicitante && (
         <div>
           <label className="block text-xs font-black text-brand-dark uppercase tracking-widest mb-2 flex items-center gap-2">
             <FileText size={14} className="text-brand-primary" />

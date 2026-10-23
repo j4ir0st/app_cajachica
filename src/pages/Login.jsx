@@ -46,14 +46,17 @@ const Login = () => {
       const userData = {
         id: rawUser.id,
         username: rawUser.username,
-        nombre: rawUser.full_name || `${rawUser.first_name} ${rawUser.last_name}`,
+        nombre: rawUser.full_name || `${rawUser.first_name || ''} ${rawUser.last_name || ''}`.trim() || rawUser.username,
+        full_name: rawUser.full_name || `${rawUser.first_name || ''} ${rawUser.last_name || ''}`.trim() || rawUser.username,
         email: rawUser.email,
+        correo: rawUser.email,
         puesto: rawUser.puesto || 'Sin Puesto',
-        area: rawUser.area || 'Sin Área',
         area_id: rawUser.area_id || 'Sin Área',
-        empresa: rawUser.empr_id || 'Sin Empresa',
+        empresa: rawUser.empr_id || rawUser.empresa || rawUser.empresa_nombre || 'SURGICORP S.R.L.',
+        empr_id: rawUser.empr_id || rawUser.empresa || rawUser.empresa_nombre || 'SURGICORP S.R.L.',
         avatar: rawUser.avatar || null,
-        is_staff: rawUser.is_staff
+        is_staff: Boolean(rawUser.is_staff),
+        is_superuser: Boolean(rawUser.is_superuser),
       };
 
       login(userData, access, refresh);

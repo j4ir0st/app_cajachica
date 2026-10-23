@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate, useLocation } from 'react-router-dom';
 import {
   Search,
@@ -21,6 +22,8 @@ import {
 import { useUserStore } from '../store/userStore';
 import { fetchAuth } from '../utils/fetchAuth';
 import { obtenerTipoCaja } from '../utils/tipoCaja';
+import { esArchivoPdf } from '../utils/archivoUtil';
+import ModalVisorComprobante from '../components/ModalVisorComprobante';
 import Toast from '../components/Toast';
 
 const API_URL = import.meta.env.DEV ? '' : (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
@@ -157,6 +160,7 @@ const MisSolicitudes = () => {
   // Filtros
   const [busqueda, setBusqueda] = useState('');
   const [filtroEstado, setFiltroEstado] = useState('TODOS');
+  const [buscandoRemoto, setBuscandoRemoto] = useState(false);
 
   // Capturar término de búsqueda proveniente del Header vía URL query param
   useEffect(() => {
@@ -295,17 +299,20 @@ const MisSolicitudes = () => {
 
       if (busqueda.trim() !== '') {
         const query = busqueda.toLowerCase().trim();
+        const querySinHash = query.replace(/^#/, '');
         const idTexto = String(req.id || '').toLowerCase();
         const obsTexto = (req.obs || '').toLowerCase();
         const solicitanteTexto = obtenerNombreSolicitante(req.usuario_id).toLowerCase();
         const areaTexto = String(req.area_id || '').toLowerCase();
         const fechaTexto = (req.fecha_solicitud || '').toLowerCase();
         const detallesTexto = (req.detalle || req.detalles || [])
-          .map((d) => `${d.detalle || ''} ${d.nro_factura || ''} ${d.nro_ruc || ''} ${d.placa || ''} ${d.subgasto_id?.nombre || ''}`)
+          .map((d) => `${d.detalle || ''} ${d.nro_factura || ''} ${d.nro_ruc || ''} ${d.placa_nombre || d.placa || ''} ${d.subgasto_id?.nombre || ''}`)
           .join(' ')
           .toLowerCase();
 
         const coincide =
+          idTexto === querySinHash ||
+          idTexto.includes(querySinHash) ||
           idTexto.includes(query) ||
           obsTexto.includes(query) ||
           solicitanteTexto.includes(query) ||
@@ -319,6 +326,69 @@ const MisSolicitudes = () => {
       return true;
     });
   }, [solicitudes, filtroEstado, busqueda]);
+
+  // Búsqueda Inteligente: En memoria primero; si no hay coincidencias o se busca por ID no cargado, consultar BD
+  useEffect(() => {
+    const termino = busqueda.trim();
+    if (!termino) {
+      setBuscandoRemoto(false);
+      return;
+    }
+
+    const idLimpio = termino.replace(/^#/, '').trim();
+    const esIdNumerico = /^\d+$/.test(idLimpio);
+    const idEncontradoEnMemoria = esIdNumerico && solicitudes.some((s) => String(s.id) === idLimpio);
+
+    // Si ya existe en memoria el ID o la búsqueda de texto ya tiene resultados locales, evitar consultar a la BD
+    if (idEncontradoEnMemoria) return;
+    if (!esIdNumerico && solicitudesFiltradas.length > 0) return;
+
+    const temporizador = setTimeout(async () => {
+      setBuscandoRemoto(true);
+      try {
+        if (esIdNumerico) {
+          const res = await fetchAuth(`${API_URL}/Requerimiento_CajaChica/${idLimpio}/?format=json`);
+          if (res.ok) {
+            const req = await res.json();
+            const idSolicitante = typeof req.usuario_id === 'object' ? req.usuario_id?.id : req.usuario_id;
+            const esMio = !user?.id || String(idSolicitante) === String(user.id) || user.is_staff || user.is_superuser;
+            if (esMio) {
+              setSolicitudes((prev) => {
+                const existe = prev.some((s) => s.id === req.id);
+                return existe ? prev : [req, ...prev];
+              });
+            }
+          }
+        } else {
+          const params = new URLSearchParams({
+            format: 'json',
+            search: termino,
+          });
+          if (user?.id) {
+            params.append('usuario_id', user.id);
+          }
+          const res = await fetchAuth(`${API_URL}/Requerimiento_CajaChica/?${params.toString()}`);
+          if (res.ok) {
+            const data = await res.json();
+            const lista = data.results ?? (Array.isArray(data) ? data : []);
+            if (lista.length > 0) {
+              setSolicitudes((prev) => {
+                const idsExistentes = new Set(prev.map((s) => s.id));
+                const nuevos = lista.filter((s) => !idsExistentes.has(s.id));
+                return nuevos.length > 0 ? [...prev, ...nuevos] : prev;
+              });
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('[MisSolicitudes] Búsqueda remota sin resultados:', err.message);
+      } finally {
+        setBuscandoRemoto(false);
+      }
+    }, 400);
+
+    return () => clearTimeout(temporizador);
+  }, [busqueda, solicitudes.length, solicitudesFiltradas.length, user?.id]);
 
   // ============================================================================
   // ACCIÓN DE LIQUIDAR REQUERIMIENTO PENDIENTE
@@ -443,9 +513,9 @@ const MisSolicitudes = () => {
 
           <button
             onClick={() => navigate('/nueva-solicitud')}
-            className="flex items-center gap-2 px-3.5 py-2 rounded-2xl bg-gradient-to-r from-brand-primary to-brand-secondary text-white text-xs font-black shadow-md shadow-brand-primary/20 hover:scale-[1.02] active:scale-[0.98] transition-all"
+            className="flex items-center gap-1.5 sm:gap-2 px-3 sm:px-3.5 py-2 rounded-2xl bg-gradient-to-r from-brand-primary to-brand-secondary text-white text-xs font-black shadow-md shadow-brand-primary/20 hover:scale-[1.02] active:scale-[0.98] transition-all"
           >
-            <Plus size={15} strokeWidth={3} />
+            <Plus size={20} strokeWidth={3.5} className="w-5 h-5 sm:w-4 sm:h-4 shrink-0" />
             <span>NUEVA RENDICIÓN</span>
           </button>
         </div>
@@ -460,8 +530,14 @@ const MisSolicitudes = () => {
             placeholder="Buscar por ID, solicitante, factura, placa o motivo..."
             value={busqueda}
             onChange={(e) => setBusqueda(e.target.value)}
-            className="w-full bg-brand-light/40 border border-gray-100 focus:border-brand-primary rounded-xl pl-9 pr-8 py-1.5 text-xs font-bold text-brand-dark outline-none transition-colors placeholder:text-gray-400 placeholder:font-normal"
+            className="w-full bg-brand-light/40 border border-gray-100 focus:border-brand-primary rounded-xl pl-9 pr-24 py-1.5 text-xs font-bold text-brand-dark outline-none transition-colors placeholder:text-gray-400 placeholder:font-normal"
           />
+          {buscandoRemoto && (
+            <div className="absolute right-8 top-1/2 -translate-y-1/2 flex items-center gap-1 text-[10px] font-bold text-brand-primary">
+              <RefreshCw size={11} className="animate-spin" />
+              <span className="hidden sm:inline">Consultando BD...</span>
+            </div>
+          )}
           {busqueda && (
             <button
               onClick={() => setBusqueda('')}
@@ -631,9 +707,15 @@ const MisSolicitudes = () => {
       {/* ========================================================================
           MODAL DETALLE DE LIQUIDACIÓN Y VISOR DE COMPROBANTES
          ======================================================================== */}
-      {solicitudSeleccionada && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-brand-dark/70 backdrop-blur-sm p-3 sm:p-4 overflow-y-auto">
-          <div className="bg-white rounded-3xl w-full max-w-2xl shadow-2xl border border-gray-100 flex flex-col max-h-[92vh] overflow-hidden animate-scale-up">
+      {solicitudSeleccionada && createPortal(
+        <div
+          className="fixed inset-0 !m-0 z-50 flex items-center justify-center bg-brand-dark/70 backdrop-blur-sm p-3 sm:p-4 overflow-y-auto"
+          onClick={() => setSolicitudSeleccionada(null)}
+        >
+          <div
+            className="bg-white rounded-3xl w-full max-w-2xl shadow-2xl border border-gray-100 flex flex-col max-h-[92vh] overflow-hidden animate-scale-up"
+            onClick={(e) => e.stopPropagation()}
+          >
             {/* Cabecera del Modal */}
             <div className="px-5 py-4 bg-white border-b border-gray-100 flex items-center justify-between shrink-0">
               <div>
@@ -775,14 +857,21 @@ const MisSolicitudes = () => {
                                 <button
                                   type="button"
                                   onClick={() => setImagenModal(det.adj_cajachica)}
-                                  className="group/img relative w-14 h-14 rounded-xl overflow-hidden border border-gray-200 shrink-0 hover:opacity-90 transition-opacity"
-                                  title="Ver imagen completa"
+                                  className="group/img relative w-14 h-14 rounded-xl overflow-hidden border border-gray-200 shrink-0 hover:opacity-90 transition-opacity bg-white"
+                                  title="Ver comprobante completo"
                                 >
-                                  <img
-                                    src={det.adj_cajachica}
-                                    alt="Comprobante"
-                                    className="w-full h-full object-cover"
-                                  />
+                                  {esArchivoPdf(det.adj_cajachica) ? (
+                                    <div className="w-full h-full bg-red-50 text-red-600 flex flex-col items-center justify-center font-bold">
+                                      <FileText size={20} />
+                                      <span className="text-[8px] font-black uppercase tracking-wider mt-0.5">PDF</span>
+                                    </div>
+                                  ) : (
+                                    <img
+                                      src={det.adj_cajachica}
+                                      alt="Comprobante"
+                                      className="w-full h-full object-cover"
+                                    />
+                                  )}
                                   <div className="absolute inset-0 bg-brand-dark/40 opacity-0 group-hover/img:opacity-100 flex items-center justify-center text-white transition-opacity">
                                     <Eye size={16} />
                                   </div>
@@ -824,6 +913,14 @@ const MisSolicitudes = () => {
                           </div>
 
                           <div className="flex flex-wrap gap-1 text-[10px] text-gray-500 font-semibold pt-1 border-t border-gray-50">
+                            {(() => {
+                              const tipoDet = obtenerTipoCaja(det);
+                              return (
+                                <span className={`px-2 py-0.5 rounded-md font-black text-[9px] uppercase border ${tipoDet.claseBadge}`}>
+                                  {tipoDet.etiqueta} {tipoDet.nombreEmpresa !== 'Sin Factura' ? `• ${tipoDet.nombreEmpresa}` : ''}
+                                </span>
+                              );
+                            })()}
                             {det.lima_provincia && (
                               <span className="px-2 py-0.5 bg-gray-50 rounded-md">
                                 {det.lima_provincia === 'L' ? 'Lima' : 'Provincia'}
@@ -835,9 +932,9 @@ const MisSolicitudes = () => {
                             {det.nro_ruc && (
                               <span className="px-2 py-0.5 bg-gray-50 rounded-md">RUC: {det.nro_ruc}</span>
                             )}
-                            {det.placa && (
+                            {(det.placa_nombre || det.placa) && (
                               <span className="px-2 py-0.5 bg-amber-50 text-amber-700 rounded-md">
-                                Placa: {det.placa}
+                                Placa: {det.placa_nombre || det.placa}
                               </span>
                             )}
                           </div>
@@ -913,32 +1010,19 @@ const MisSolicitudes = () => {
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* ========================================================================
-          VISOR DE IMAGEN A PANTALLA COMPLETA
+          VISOR UNIVERSAL DE COMPROBANTE (IMÁGENES Y PDFS)
          ======================================================================== */}
       {imagenModal && (
-        <div
-          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/90 p-4 animate-fade-in"
-          onClick={() => setImagenModal(null)}
-        >
-          <div className="relative max-w-3xl max-h-[90vh] flex flex-col items-center">
-            <button
-              type="button"
-              onClick={() => setImagenModal(null)}
-              className="absolute -top-12 right-0 text-white p-2 rounded-full hover:bg-white/20 transition-colors"
-            >
-              <X size={24} />
-            </button>
-            <img
-              src={imagenModal}
-              alt="Comprobante en alta resolución"
-              className="max-w-full max-h-[85vh] object-contain rounded-2xl shadow-2xl"
-            />
-          </div>
-        </div>
+        <ModalVisorComprobante
+          archivo={imagenModal}
+          onClose={() => setImagenModal(null)}
+          titulo="Comprobante de Gasto"
+        />
       )}
     </div>
   );

@@ -23,7 +23,10 @@ function iisFallbackPlugin() {
           '/Requerimiento_CajaChica',
           '/saldos_semanales',
           '/media',
-          '/static'
+          '/static',
+          '/Empresa',
+          '/SI_Empresa',
+          '/SI_Empresas'
         ];
 
         const esRutaExcluida = prefijosExcluidos.some(prefix => url.startsWith(prefix));
@@ -56,10 +59,27 @@ export default defineConfig(({ mode }) => {
       watch: {
         usePolling: true,
       },
-      // HMR dinámico
-      hmr: true,
+      // HMR dinámico con overlay desactivado para evitar alertas intrusivas por WebSocket detrás de proxy
+      hmr: {
+        overlay: false,
+      },
       // Configuración de Proxy Dinámico para evitar CORS en desarrollo
       proxy: {
+        '/Empresa': {
+          target: target,
+          changeOrigin: true,
+          secure: false,
+        },
+        '/SI_Empresa': {
+          target: target,
+          changeOrigin: true,
+          secure: false,
+        },
+        '/SI_Empresas': {
+          target: target,
+          changeOrigin: true,
+          secure: false,
+        },
         '/api': {
           target: target,
           changeOrigin: true,
@@ -97,6 +117,11 @@ export default defineConfig(({ mode }) => {
           secure: false,
         },
         '/RC_Provincia': {
+          target: target,
+          changeOrigin: true,
+          secure: false,
+        },
+        '/RC_Placas': {
           target: target,
           changeOrigin: true,
           secure: false,

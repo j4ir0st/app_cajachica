@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useMemo, useRef, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import {
   PieChart,
@@ -28,6 +29,8 @@ import {
 import { useUserStore } from '../store/userStore';
 import { fetchAuth, extraerMensajeError } from '../utils/fetchAuth';
 import { obtenerTipoCaja, resolverClaveTipoIndividual } from '../utils/tipoCaja';
+import { esArchivoPdf } from '../utils/archivoUtil';
+import ModalVisorComprobante from '../components/ModalVisorComprobante';
 import Toast from '../components/Toast';
 
 const API_URL = import.meta.env.DEV ? '' : (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
@@ -89,6 +92,7 @@ const BalanceSemanal = () => {
   // Filtros y Búsqueda
   const [busqueda, setBusqueda] = useState('');
   const [mesFiltro, setMesFiltro] = useState('TODOS');
+  const [buscandoRemoto, setBuscandoRemoto] = useState(false);
 
   // Modales y Auditoría de Comprobantes
   const [solicitudDetalle, setSolicitudDetalle] = useState(null);
@@ -96,6 +100,7 @@ const BalanceSemanal = () => {
   const [detallesCargadosManual, setDetallesCargadosManual] = useState(null);
   const [imagenModal, setImagenModal] = useState(null);
   const [mostrarModalReporte, setMostrarModalReporte] = useState(false);
+  const [mostrarPopupRequerimientos, setMostrarPopupRequerimientos] = useState(false);
 
   // ============================================================================
   // CARGA DE SALDOS SEMANALES (INFINITE SCROLL CON TOP=10)
@@ -313,18 +318,99 @@ const BalanceSemanal = () => {
 
       if (busqueda.trim() !== '') {
         const query = busqueda.toLowerCase().trim();
+        const querySinHash = query.replace(/^#/, '');
+        const idTexto = String(sem.id || '').toLowerCase();
         const codigoTexto = (sem.codigo_cierre || '').toLowerCase();
-        const tieneReq = (sem.requerimientos || []).some(
-          (r) =>
-            String(r.id || '').includes(query) ||
-            obtenerNombreSolicitante(r.usuario_id).toLowerCase().includes(query)
-        );
-        return codigoTexto.includes(query) || tieneReq;
+        const tieneReq = (sem.requerimientos || []).some((r) => {
+          const idReq = typeof r === 'object' ? String(r.id || '') : String(r);
+          const nombreSol = typeof r === 'object' ? obtenerNombreSolicitante(r.usuario_id).toLowerCase() : '';
+          return idReq === querySinHash || idReq.includes(querySinHash) || nombreSol.includes(query);
+        });
+        return idTexto === querySinHash || idTexto.includes(querySinHash) || codigoTexto.includes(query) || tieneReq;
       }
 
       return true;
     });
   }, [saldosSemanales, mesFiltro, busqueda]);
+
+  // Búsqueda Inteligente: En memoria primero; si no hay coincidencias o se busca por ID no cargado, consultar BD
+  useEffect(() => {
+    const termino = busqueda.trim();
+    if (!termino) {
+      setBuscandoRemoto(false);
+      return;
+    }
+
+    const idLimpio = termino.replace(/^#/, '').trim();
+    const esIdNumerico = /^\d+$/.test(idLimpio);
+    const idEncontradoEnMemoria = esIdNumerico && saldosSemanales.some((s) => String(s.id) === idLimpio);
+
+    // Si ya existe en memoria el ID o la búsqueda de texto ya tiene resultados locales, evitar consultar a la BD
+    if (idEncontradoEnMemoria) return;
+    if (!esIdNumerico && semanasFiltradas.length > 0) return;
+
+    const temporizador = setTimeout(async () => {
+      setBuscandoRemoto(true);
+      try {
+        if (esIdNumerico) {
+          // 1. Probar si es ID directo de un Saldo Semanal
+          const resSemana = await fetchAuth(`${API_URL}/RC_SaldoSemanal/${idLimpio}/?format=json`);
+          if (resSemana.ok) {
+            const semana = await resSemana.json();
+            setSaldosSemanales((prev) => {
+              const existe = prev.some((s) => s.id === semana.id);
+              return existe ? prev : [semana, ...prev];
+            });
+            setSemanaSeleccionada(semana);
+            return;
+          }
+
+          // 2. Si no es saldo semanal, comprobar si es ID de un requerimiento y traer su semana
+          const resReq = await fetchAuth(`${API_URL}/Requerimiento_CajaChica/${idLimpio}/?format=json`);
+          if (resReq.ok) {
+            const req = await resReq.json();
+            const semanaId = req.saldo_semanal_id || (typeof req.saldo_semanal === 'object' ? req.saldo_semanal?.id : req.saldo_semanal);
+            if (semanaId) {
+              const resSem = await fetchAuth(`${API_URL}/RC_SaldoSemanal/${semanaId}/?format=json`);
+              if (resSem.ok) {
+                const semanaEncontrada = await resSem.json();
+                setSaldosSemanales((prev) => {
+                  const existe = prev.some((s) => s.id === semanaEncontrada.id);
+                  return existe ? prev : [semanaEncontrada, ...prev];
+                });
+                setSemanaSeleccionada(semanaEncontrada);
+              }
+            }
+          }
+        } else {
+          // Búsqueda general en BD por texto o código de cierre
+          const params = new URLSearchParams({
+            format: 'json',
+            search: termino,
+          });
+          const res = await fetchAuth(`${API_URL}/RC_SaldoSemanal/?${params.toString()}`);
+          if (res.ok) {
+            const data = await res.json();
+            const lista = data.results ?? (Array.isArray(data) ? data : []);
+            if (lista.length > 0) {
+              setSaldosSemanales((prev) => {
+                const idsExistentes = new Set(prev.map((s) => s.id));
+                const nuevos = lista.filter((s) => !idsExistentes.has(s.id));
+                return nuevos.length > 0 ? [...prev, ...nuevos] : prev;
+              });
+              setSemanaSeleccionada(lista[0]);
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('[BalanceSemanal] Búsqueda remota sin resultados:', err.message);
+      } finally {
+        setBuscandoRemoto(false);
+      }
+    }, 400);
+
+    return () => clearTimeout(temporizador);
+  }, [busqueda, saldosSemanales.length, semanasFiltradas.length]);
 
   // Desglose por categorías de gasto de la semana activa
   const desgloseCategoriasSemana = useMemo(() => {
@@ -631,8 +717,14 @@ const BalanceSemanal = () => {
             placeholder="Buscar por código de cierre o ID..."
             value={busqueda}
             onChange={(e) => setBusqueda(e.target.value)}
-            className="w-full bg-brand-light/40 border border-gray-100 focus:border-brand-primary rounded-xl pl-9 pr-8 py-1.5 text-xs font-bold text-brand-dark outline-none transition-colors placeholder:text-gray-400 placeholder:font-normal"
+            className="w-full bg-brand-light/40 border border-gray-100 focus:border-brand-primary rounded-xl pl-9 pr-24 py-1.5 text-xs font-bold text-brand-dark outline-none transition-colors placeholder:text-gray-400 placeholder:font-normal"
           />
+          {buscandoRemoto && (
+            <div className="absolute right-8 top-1/2 -translate-y-1/2 flex items-center gap-1 text-[10px] font-bold text-brand-primary">
+              <RefreshCw size={11} className="animate-spin" />
+              <span className="hidden sm:inline">Consultando BD...</span>
+            </div>
+          )}
           {busqueda && (
             <button
               onClick={() => setBusqueda('')}
@@ -703,13 +795,21 @@ const BalanceSemanal = () => {
                     }`}
                   >
                     <div className="flex items-center justify-between">
-                      <span
-                        className={`text-xs font-black px-2 py-0.5 rounded-lg ${
-                          seleccionada ? 'bg-white/20 text-white' : 'bg-brand-light text-brand-dark'
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSemanaSeleccionada(sem);
+                          setMostrarPopupRequerimientos(true);
+                        }}
+                        className={`text-xs font-black px-2 py-0.5 rounded-lg transition-all hover:scale-105 active:scale-95 flex items-center gap-1 group/cod ${
+                          seleccionada ? 'bg-white/20 text-white hover:bg-white/30' : 'bg-brand-light text-brand-dark hover:bg-brand-primary/10 hover:text-brand-primary'
                         }`}
+                        title="Ver requerimientos de este cierre"
                       >
-                        {sem.codigo_cierre || `Cierre #${sem.id}`}
-                      </span>
+                        <span>{sem.codigo_cierre || `Cierre #${sem.id}`}</span>
+                        <Eye size={12} className="opacity-70 group-hover/cod:opacity-100" />
+                      </button>
 
                       <span className={`text-xs font-black ${seleccionada ? 'text-white' : 'text-brand-primary'}`}>
                         S/ {gasto.toFixed(2)}
@@ -767,9 +867,15 @@ const BalanceSemanal = () => {
               <div className="bg-white rounded-2xl p-3.5 sm:p-4 border border-gray-100 shadow-sm shrink-0 space-y-3">
                 <div className="flex items-center justify-between">
                   <div>
-                    <span className="text-[10px] font-black uppercase tracking-widest text-brand-primary">
-                      {semanaSeleccionada.codigo_cierre || `Semana #${semanaSeleccionada.id}`}
-                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setMostrarPopupRequerimientos(true)}
+                      className="text-[10px] font-black uppercase tracking-widest text-brand-primary hover:underline flex items-center gap-1 group"
+                      title="Ver lista de requerimientos en popup"
+                    >
+                      <span>{semanaSeleccionada.codigo_cierre || `Semana #${semanaSeleccionada.id}`}</span>
+                      <Eye size={11} className="opacity-60 group-hover:opacity-100" />
+                    </button>
                     <h3 className="text-sm sm:text-base font-black text-brand-dark">
                       Balance del {formatearFechaCorta(semanaSeleccionada.fecha_inicio)} al{' '}
                       {formatearFechaCorta(semanaSeleccionada.fecha_fin)}
@@ -833,10 +939,22 @@ const BalanceSemanal = () => {
                     </div>
                   </div>
                 )}
+
+                {/* Botón exclusivo móvil para ver los requerimientos cerrados */}
+                <div className="lg:hidden pt-2 border-t border-gray-100">
+                  <button
+                    type="button"
+                    onClick={() => setMostrarPopupRequerimientos(true)}
+                    className="w-full flex items-center justify-center gap-2 py-2 px-3 bg-brand-light hover:bg-brand-primary/10 text-brand-dark rounded-xl border border-brand-primary/20 text-xs font-black transition-all shadow-xs"
+                  >
+                    <Eye size={14} className="text-brand-primary" />
+                    <span>Ver {requerimientosSemana.length} Requerimientos Cerrados ({semanaSeleccionada.codigo_cierre})</span>
+                  </button>
+                </div>
               </div>
 
-              {/* Lista Scrollable de Requerimientos de la Semana */}
-              <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-3 flex flex-col flex-1 min-h-0 overflow-hidden">
+              {/* Lista Scrollable de Requerimientos de la Semana (Oculta en celular, visible en escritorio) */}
+              <div className="hidden lg:flex bg-white rounded-2xl border border-gray-100 shadow-sm p-3 flex-col flex-1 min-h-0 overflow-hidden">
                 <div className="flex items-center justify-between mb-2 shrink-0">
                   <span className="text-[10px] font-black uppercase tracking-widest text-brand-primary">
                     Requerimientos Cerrados ({requerimientosSemana.length})
@@ -921,9 +1039,15 @@ const BalanceSemanal = () => {
       {/* ========================================================================
           MODAL DE REPORTE OFICIAL EN PDF (VISTA PREVIA E IMPRESIÓN OFICIAL)
          ======================================================================== */}
-      {mostrarModalReporte && semanaSeleccionada && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-brand-dark/80 backdrop-blur-sm p-2 sm:p-4 overflow-y-auto">
-          <div className="bg-white rounded-3xl w-full max-w-4xl shadow-2xl border border-gray-100 flex flex-col max-h-[96vh] overflow-hidden animate-scale-up">
+      {mostrarModalReporte && semanaSeleccionada && createPortal(
+        <div
+          className="fixed inset-0 !m-0 z-50 flex items-center justify-center bg-brand-dark/80 backdrop-blur-sm p-2 sm:p-4 overflow-y-auto"
+          onClick={() => setMostrarModalReporte(false)}
+        >
+          <div
+            className="bg-white rounded-3xl w-full max-w-4xl shadow-2xl border border-gray-100 flex flex-col max-h-[96vh] overflow-hidden animate-scale-up"
+            onClick={(e) => e.stopPropagation()}
+          >
             {/* Cabecera del Modal de Reporte */}
             <div className="px-5 py-3.5 bg-brand-dark text-white flex flex-wrap items-center justify-between gap-3 shrink-0">
               <div className="flex items-center gap-2">
@@ -1133,15 +1257,138 @@ const BalanceSemanal = () => {
               </div>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
+      )}
+
+      {/* ========================================================================
+          MODAL POPUP DE REQUERIMIENTOS CERRADOS DE LA SEMANA (MÓVIL Y DESKTOP)
+         ======================================================================== */}
+      {mostrarPopupRequerimientos && semanaSeleccionada && createPortal(
+        <div
+          className="fixed inset-0 !m-0 z-50 flex items-center justify-center bg-brand-dark/70 backdrop-blur-sm p-3 sm:p-4 overflow-y-auto"
+          onClick={() => setMostrarPopupRequerimientos(false)}
+        >
+          <div
+            className="bg-white rounded-3xl w-full max-w-2xl shadow-2xl border border-gray-100 flex flex-col max-h-[92vh] overflow-hidden animate-scale-up"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Cabecera */}
+            <div className="px-5 py-3.5 bg-white border-b border-gray-100 flex items-center justify-between shrink-0">
+              <div>
+                <span className="text-[10px] font-black uppercase tracking-widest text-brand-primary">
+                  {semanaSeleccionada.codigo_cierre || `Cierre #${semanaSeleccionada.id}`}
+                </span>
+                <h3 className="text-sm font-black text-brand-dark">
+                  Requerimientos Cerrados ({requerimientosSemana.length})
+                </h3>
+                <span className="text-[11px] text-gray-500 font-semibold">
+                  Total: S/ {totalGastoVal.toFixed(2)}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setMostrarPopupRequerimientos(false)}
+                className="p-1.5 rounded-xl text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
+                title="Cerrar modal"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Lista de Requerimientos */}
+            <div className="p-4 overflow-y-auto space-y-2 flex-1">
+              {cargandoRequerimientos ? (
+                <div className="flex flex-col items-center justify-center py-10 space-y-2">
+                  <div className="w-6 h-6 border-2 border-brand-primary border-t-transparent rounded-full animate-spin" />
+                  <span className="text-xs text-gray-400 font-bold">Cargando requerimientos...</span>
+                </div>
+              ) : requerimientosSemana.length > 0 ? (
+                requerimientosSemana.map((req) => {
+                  const totalGast = parseFloat(req.total_gastado || req.monto_solicitado || 0);
+                  const nombreSolicitante = obtenerNombreSolicitante(req.usuario_id);
+                  const listaDet = req.detalle || req.detalles || [];
+                  const numComprobantes = listaDet.length;
+                  const tipoCajaInfo = obtenerTipoCaja(req);
+
+                  return (
+                    <div
+                      key={req.id}
+                      onClick={() => setSolicitudDetalle(req)}
+                      className="p-3 bg-gray-50/70 hover:bg-brand-light/60 rounded-xl border border-gray-100 flex items-center justify-between gap-3 transition-all cursor-pointer group hover:border-brand-primary/30"
+                    >
+                      <div className="flex items-center gap-2.5 sm:gap-3">
+                        <span className="text-xs font-black text-brand-dark bg-white border border-gray-200 px-2 py-1 rounded-lg shrink-0 group-hover:border-brand-primary">
+                          #{req.id}
+                        </span>
+                        <span className={`text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded-lg border shrink-0 ${tipoCajaInfo.claseBadge}`}>
+                          {tipoCajaInfo.etiqueta}
+                        </span>
+                        <div>
+                          <h4 className="text-xs font-black text-brand-dark leading-tight group-hover:text-brand-primary transition-colors">
+                            {nombreSolicitante}
+                          </h4>
+                          <div className="flex items-center gap-2 text-[10px] text-gray-400 mt-0.5">
+                            <span>{req.fecha_solicitud ? req.fecha_solicitud.slice(0, 10) : ''}</span>
+                            <span>• {numComprobantes} comprobante(s)</span>
+                            {req.obs && <span className="italic line-clamp-1">"{req.obs}"</span>}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2.5 shrink-0">
+                        <span className="text-xs font-black text-brand-dark">
+                          S/ {totalGast.toFixed(2)}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSolicitudDetalle(req);
+                          }}
+                          className="p-1.5 bg-white border border-gray-200 group-hover:border-brand-primary text-gray-600 group-hover:text-brand-primary rounded-lg transition-colors"
+                          title="Ver detalle y fotos de comprobantes"
+                        >
+                          <Eye size={13} />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })
+              ) : (
+                <div className="text-center py-8 text-xs text-gray-400">
+                  No hay requerimientos vinculados a esta semana.
+                </div>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="px-4 py-2.5 bg-gray-50 border-t border-gray-100 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setMostrarPopupRequerimientos(false)}
+                className="px-4 py-1.5 rounded-xl border border-gray-200 text-xs font-bold text-gray-600 hover:bg-white transition-all"
+              >
+                Cerrar
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
       )}
 
       {/* ========================================================================
           MODAL DETALLE DE COMPROBANTES DE LA SOLICITUD
          ======================================================================== */}
-      {solicitudDetalle && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-brand-dark/70 backdrop-blur-sm p-3 sm:p-4 overflow-y-auto">
-          <div className="bg-white rounded-3xl w-full max-w-2xl shadow-2xl border border-gray-100 flex flex-col max-h-[92vh] overflow-hidden animate-scale-up">
+      {solicitudDetalle && createPortal(
+        <div
+          className="fixed inset-0 !m-0 z-[60] flex items-center justify-center bg-brand-dark/70 backdrop-blur-sm p-3 sm:p-4 overflow-y-auto"
+          onClick={() => setSolicitudDetalle(null)}
+        >
+          <div
+            className="bg-white rounded-3xl w-full max-w-2xl shadow-2xl border border-gray-100 flex flex-col max-h-[92vh] overflow-hidden animate-scale-up"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="px-5 py-3.5 bg-white border-b border-gray-100 flex items-center justify-between shrink-0">
               <div>
                 <div className="flex items-center gap-2">
@@ -1163,6 +1410,7 @@ const BalanceSemanal = () => {
                 type="button"
                 onClick={() => setSolicitudDetalle(null)}
                 className="p-1.5 rounded-xl text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
+                title="Cerrar modal"
               >
                 <X size={18} />
               </button>
@@ -1195,6 +1443,7 @@ const BalanceSemanal = () => {
                       ? `${det.origen_nombre} → ${det.destino_nombre}`
                       : (det.origen_nombre || det.destino_nombre || '');
                     const docTexto = det.nro_factura ? `Doc: ${det.nro_factura}` : (det.nro_ruc ? `RUC: ${det.nro_ruc}` : '');
+                    const tipoIndividual = obtenerTipoCaja(det);
 
                     return (
                       <div key={det.id || det.url || idx} className="p-3 bg-white rounded-xl border border-gray-100 flex items-center justify-between gap-3 shadow-xs hover:border-gray-200 transition-colors">
@@ -1203,10 +1452,17 @@ const BalanceSemanal = () => {
                             <button
                               type="button"
                               onClick={() => setImagenModal(det.adj_cajachica)}
-                              className="w-12 h-12 rounded-lg overflow-hidden border border-gray-200 shrink-0 hover:opacity-85 transition-opacity"
-                              title="Ver foto del comprobante"
+                              className="w-12 h-12 rounded-lg overflow-hidden border border-gray-200 shrink-0 hover:opacity-85 transition-opacity bg-white"
+                              title="Ver comprobante completo"
                             >
-                              <img src={det.adj_cajachica} alt="Comprobante" className="w-full h-full object-cover" />
+                              {esArchivoPdf(det.adj_cajachica) ? (
+                                <div className="w-full h-full bg-red-50 text-red-600 flex flex-col items-center justify-center font-bold">
+                                  <FileText size={18} />
+                                  <span className="text-[7px] font-black uppercase tracking-wider mt-0.5">PDF</span>
+                                </div>
+                              ) : (
+                                <img src={det.adj_cajachica} alt="Comprobante" className="w-full h-full object-cover" />
+                              )}
                             </button>
                           ) : (
                             <div className="w-12 h-12 rounded-lg bg-gray-100 flex items-center justify-center text-gray-400 shrink-0">
@@ -1216,14 +1472,23 @@ const BalanceSemanal = () => {
                           <div className="min-w-0">
                             <div className="flex items-center gap-1.5 flex-wrap">
                               <h4 className="text-xs font-black text-brand-dark leading-tight">{nombreSubgasto}</h4>
+                              {/* Tipo de caja individual por comprobante */}
+                              <span className={`text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded-md border ${tipoIndividual.claseBadge}`}>
+                                {tipoIndividual.etiqueta}
+                              </span>
                               {det.lima_provincia && (
-                                <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-gray-100 text-gray-500">
+                                <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-gray-100 text-gray-500">
                                   {det.lima_provincia === 'L' ? 'Lima' : 'Provincia'}
                                 </span>
                               )}
                             </div>
                             {rutaOrigenDestino && (
                               <p className="text-[11px] text-brand-primary font-semibold mt-0.5 truncate">{rutaOrigenDestino}</p>
+                            )}
+                            {(det.placa_nombre || det.placa) && (
+                              <span className="text-[10px] text-amber-700 font-bold block mt-0.5">
+                                Placa: {det.placa_nombre || det.placa}
+                              </span>
                             )}
                             {det.detalle && (
                               <p className="text-[11px] text-gray-500 mt-0.5 line-clamp-2">{det.detalle}</p>
@@ -1255,30 +1520,19 @@ const BalanceSemanal = () => {
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
-      {/* Visor de Imagen a Pantalla Completa */}
+      {/* ========================================================================
+          VISOR UNIVERSAL DE COMPROBANTE (IMÁGENES Y PDFS)
+         ======================================================================== */}
       {imagenModal && (
-        <div
-          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/90 p-4 animate-fade-in"
-          onClick={() => setImagenModal(null)}
-        >
-          <div className="relative max-w-3xl max-h-[90vh] flex flex-col items-center">
-            <button
-              type="button"
-              onClick={() => setImagenModal(null)}
-              className="absolute -top-10 right-0 text-white p-2 rounded-full hover:bg-white/20 transition-colors"
-            >
-              <X size={24} />
-            </button>
-            <img
-              src={imagenModal}
-              alt="Comprobante en alta resolución"
-              className="max-w-full max-h-[85vh] object-contain rounded-2xl shadow-2xl"
-            />
-          </div>
-        </div>
+        <ModalVisorComprobante
+          archivo={imagenModal}
+          onClose={() => setImagenModal(null)}
+          titulo="Comprobante de Gasto"
+        />
       )}
 
       {/* Notificación flotante Toast */}

@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import {
   DollarSign,
@@ -26,6 +27,8 @@ import {
 import { useUserStore } from '../store/userStore';
 import { fetchAuth, extraerMensajeError } from '../utils/fetchAuth';
 import { obtenerTipoCaja } from '../utils/tipoCaja';
+import { esArchivoPdf } from '../utils/archivoUtil';
+import ModalVisorComprobante from '../components/ModalVisorComprobante';
 import Toast from '../components/Toast';
 
 const API_URL = import.meta.env.DEV ? '' : (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
@@ -82,6 +85,7 @@ const CierreCaja = () => {
 
   // Filtros y búsqueda
   const [busqueda, setBusqueda] = useState('');
+  const [buscandoRemoto, setBuscandoRemoto] = useState(false);
 
   // Parámetros del Balance Semanal
   const [saldoInicial, setSaldoInicial] = useState('4000.00');
@@ -149,6 +153,7 @@ const CierreCaja = () => {
     if (!busqueda.trim()) return solicitudesLiquidadas;
 
     const query = busqueda.toLowerCase().trim();
+    const querySinHash = query.replace(/^#/, '');
     return solicitudesLiquidadas.filter((req) => {
       const idTexto = String(req.id || '').toLowerCase();
       const solicitanteTexto = obtenerNombreSolicitante(req.usuario_id).toLowerCase();
@@ -156,6 +161,8 @@ const CierreCaja = () => {
       const areaTexto = String(req.area_id || '').toLowerCase();
 
       return (
+        idTexto === querySinHash ||
+        idTexto.includes(querySinHash) ||
         idTexto.includes(query) ||
         solicitanteTexto.includes(query) ||
         obsTexto.includes(query) ||
@@ -163,6 +170,63 @@ const CierreCaja = () => {
       );
     });
   }, [solicitudesLiquidadas, busqueda]);
+
+  // Búsqueda Inteligente: En memoria primero; si no hay coincidencias o se busca por ID no cargado, consultar BD
+  useEffect(() => {
+    const termino = busqueda.trim();
+    if (!termino) {
+      setBuscandoRemoto(false);
+      return;
+    }
+
+    const idLimpio = termino.replace(/^#/, '').trim();
+    const esIdNumerico = /^\d+$/.test(idLimpio);
+    const idEncontradoEnMemoria = esIdNumerico && solicitudesLiquidadas.some((s) => String(s.id) === idLimpio);
+
+    // Si ya existe en memoria el ID o la búsqueda de texto ya tiene resultados locales, evitar consultar a la BD
+    if (idEncontradoEnMemoria) return;
+    if (!esIdNumerico && solicitudesFiltradas.length > 0) return;
+
+    const temporizador = setTimeout(async () => {
+      setBuscandoRemoto(true);
+      try {
+        if (esIdNumerico) {
+          const res = await fetchAuth(`${API_URL}/Requerimiento_CajaChica/${idLimpio}/?format=json`);
+          if (res.ok) {
+            const req = await res.json();
+            setSolicitudesLiquidadas((prev) => {
+              const existe = prev.some((s) => s.id === req.id);
+              return existe ? prev : [req, ...prev];
+            });
+          }
+        } else {
+          const params = new URLSearchParams({
+            format: 'json',
+            estado_requerimiento: 'LQ',
+            search: termino,
+          });
+          const res = await fetchAuth(`${API_URL}/Requerimiento_CajaChica/?${params.toString()}`);
+          if (res.ok) {
+            const data = await res.json();
+            const lista = data.results ?? (Array.isArray(data) ? data : []);
+            if (lista.length > 0) {
+              setSolicitudesLiquidadas((prev) => {
+                const idsExistentes = new Set(prev.map((s) => s.id));
+                const nuevos = lista.filter((s) => !idsExistentes.has(s.id));
+                return nuevos.length > 0 ? [...prev, ...nuevos] : prev;
+              });
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('[CierreCaja] Búsqueda remota sin resultados:', err.message);
+      } finally {
+        setBuscandoRemoto(false);
+      }
+    }, 400);
+
+    return () => clearTimeout(temporizador);
+  }, [busqueda, solicitudesLiquidadas.length, solicitudesFiltradas.length]);
 
   // ============================================================================
   // CÁLCULOS FINANCIEROS DEL CIERRE
@@ -461,8 +525,14 @@ const CierreCaja = () => {
             placeholder="Buscar por ID, personal solicitante o motivo de gasto..."
             value={busqueda}
             onChange={(e) => setBusqueda(e.target.value)}
-            className="w-full bg-brand-light/40 border border-gray-100 focus:border-brand-primary rounded-xl pl-9 pr-8 py-1.5 text-xs font-bold text-brand-dark outline-none transition-colors placeholder:text-gray-400 placeholder:font-normal"
+            className="w-full bg-brand-light/40 border border-gray-100 focus:border-brand-primary rounded-xl pl-9 pr-24 py-1.5 text-xs font-bold text-brand-dark outline-none transition-colors placeholder:text-gray-400 placeholder:font-normal"
           />
+          {buscandoRemoto && (
+            <div className="absolute right-8 top-1/2 -translate-y-1/2 flex items-center gap-1 text-[10px] font-bold text-brand-primary">
+              <RefreshCw size={11} className="animate-spin" />
+              <span className="hidden sm:inline">Consultando BD...</span>
+            </div>
+          )}
           {busqueda && (
             <button
               onClick={() => setBusqueda('')}
@@ -588,9 +658,15 @@ const CierreCaja = () => {
       {/* ========================================================================
           MODAL DE CONFIRMACIÓN DEL CIERRE DE CAJA
          ======================================================================== */}
-      {mostrarModalConfirmacion && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-brand-dark/70 backdrop-blur-sm p-4 animate-fade-in">
-          <div className="bg-white rounded-3xl w-full max-w-md shadow-2xl border border-gray-100 p-6 space-y-4 animate-scale-up">
+      {mostrarModalConfirmacion && createPortal(
+        <div
+          className="fixed inset-0 !m-0 z-50 flex items-center justify-center bg-brand-dark/70 backdrop-blur-sm p-4 animate-fade-in"
+          onClick={() => setMostrarModalConfirmacion(false)}
+        >
+          <div
+            className="bg-white rounded-3xl w-full max-w-md shadow-2xl border border-gray-100 p-6 space-y-4 animate-scale-up"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="w-12 h-12 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center mx-auto">
               <Lock size={24} />
             </div>
@@ -659,15 +735,22 @@ const CierreCaja = () => {
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* ========================================================================
           MODAL DETALLE DE COMPROBANTES / AUDITORÍA
          ======================================================================== */}
-      {solicitudSeleccionada && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-brand-dark/70 backdrop-blur-sm p-3 sm:p-4 overflow-y-auto">
-          <div className="bg-white rounded-3xl w-full max-w-2xl shadow-2xl border border-gray-100 flex flex-col max-h-[92vh] overflow-hidden animate-scale-up">
+      {solicitudSeleccionada && createPortal(
+        <div
+          className="fixed inset-0 !m-0 z-50 flex items-center justify-center bg-brand-dark/70 backdrop-blur-sm p-3 sm:p-4 overflow-y-auto"
+          onClick={() => setSolicitudSeleccionada(null)}
+        >
+          <div
+            className="bg-white rounded-3xl w-full max-w-2xl shadow-2xl border border-gray-100 flex flex-col max-h-[92vh] overflow-hidden animate-scale-up"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="px-5 py-3.5 bg-white border-b border-gray-100 flex items-center justify-between shrink-0">
               <div>
                 <div className="flex items-center gap-2">
@@ -713,9 +796,17 @@ const CierreCaja = () => {
                       <button
                         type="button"
                         onClick={() => setImagenModal(det.adj_cajachica)}
-                        className="w-12 h-12 rounded-lg overflow-hidden border border-gray-200 shrink-0"
+                        className="w-12 h-12 rounded-lg overflow-hidden border border-gray-200 shrink-0 hover:opacity-85 transition-opacity bg-white"
+                        title="Ver comprobante completo"
                       >
-                        <img src={det.adj_cajachica} alt="Comprobante" className="w-full h-full object-cover" />
+                        {esArchivoPdf(det.adj_cajachica) ? (
+                          <div className="w-full h-full bg-red-50 text-red-600 flex flex-col items-center justify-center font-bold">
+                            <FileText size={18} />
+                            <span className="text-[7px] font-black uppercase tracking-wider mt-0.5">PDF</span>
+                          </div>
+                        ) : (
+                          <img src={det.adj_cajachica} alt="Comprobante" className="w-full h-full object-cover" />
+                        )}
                       </button>
                     ) : (
                       <div className="w-12 h-12 rounded-lg bg-gray-100 flex items-center justify-center text-gray-400 shrink-0">
@@ -723,7 +814,17 @@ const CierreCaja = () => {
                       </div>
                     )}
                     <div>
-                      <h4 className="text-xs font-black text-brand-dark">{det.subgasto_id?.nombre || 'Gasto'}</h4>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <h4 className="text-xs font-black text-brand-dark">{det.subgasto_id?.nombre || 'Gasto'}</h4>
+                        {(() => {
+                          const tipoDet = obtenerTipoCaja(det);
+                          return (
+                            <span className={`px-2 py-0.5 rounded-md font-black text-[9px] uppercase border ${tipoDet.claseBadge}`}>
+                              {tipoDet.etiqueta} {tipoDet.nombreEmpresa !== 'Sin Factura' ? `• ${tipoDet.nombreEmpresa}` : ''}
+                            </span>
+                          );
+                        })()}
+                      </div>
                       <p className="text-[11px] text-gray-500">{det.detalle || 'Sin descripción'}</p>
                     </div>
                   </div>
@@ -742,30 +843,19 @@ const CierreCaja = () => {
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
-      {/* Visor de Imagen a Pantalla Completa */}
+      {/* ========================================================================
+          VISOR UNIVERSAL DE COMPROBANTE (IMÁGENES Y PDFS)
+         ======================================================================== */}
       {imagenModal && (
-        <div
-          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/90 p-4 animate-fade-in"
-          onClick={() => setImagenModal(null)}
-        >
-          <div className="relative max-w-3xl max-h-[90vh] flex flex-col items-center">
-            <button
-              type="button"
-              onClick={() => setImagenModal(null)}
-              className="absolute -top-10 right-0 text-white p-2 rounded-full hover:bg-white/20 transition-colors"
-            >
-              <X size={24} />
-            </button>
-            <img
-              src={imagenModal}
-              alt="Comprobante"
-              className="max-w-full max-h-[85vh] object-contain rounded-2xl shadow-2xl"
-            />
-          </div>
-        </div>
+        <ModalVisorComprobante
+          archivo={imagenModal}
+          onClose={() => setImagenModal(null)}
+          titulo="Comprobante de Gasto"
+        />
       )}
     </div>
   );

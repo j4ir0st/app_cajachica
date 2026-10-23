@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { LogOut, ChevronDown, Bell, User, Search, PlusCircle, RefreshCw } from 'lucide-react';
+import { LogOut, ChevronDown, Bell, User, Search, PlusCircle, Plus, RefreshCw, Settings } from 'lucide-react';
 import { useUserStore } from '../store/userStore';
 import { useCatalogoStore } from '../store/catalogoStore';
 import { limpiarCatalogos } from '../utils/catalogoCache';
@@ -13,9 +13,27 @@ const Header = () => {
   const [cacheLimpiado, setCacheLimpiado] = useState(false);
   const [recargandoLiquidaciones, setRecargandoLiquidaciones] = useState(false);
   const [busquedaHeader, setBusquedaHeader] = useState('');
+  const perfilContenedorRef = useRef(null);
+
   const { user, logout } = useUserStore();
   const { cargarCatalogos } = useCatalogoStore();
   const navigate = useNavigate();
+
+  // Cerrar el menú desplegable al hacer clic fuera
+  useEffect(() => {
+    if (!isDropdownOpen) return;
+    const clickAfuera = (e) => {
+      if (perfilContenedorRef.current && !perfilContenedorRef.current.contains(e.target)) {
+        setIsDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', clickAfuera);
+    document.addEventListener('touchstart', clickAfuera, { passive: true });
+    return () => {
+      document.removeEventListener('mousedown', clickAfuera);
+      document.removeEventListener('touchstart', clickAfuera);
+    };
+  }, [isDropdownOpen]);
 
   const handleLogout = () => {
     logout();
@@ -47,6 +65,23 @@ const Header = () => {
     setRecargandoLiquidaciones(true);
     setTimeout(() => setRecargandoLiquidaciones(false), 1200);
   };
+
+  // Datos del perfil unificado Surgicorp
+  const nombreCompleto =
+    user?.full_name ||
+    user?.nombre ||
+    `${user?.first_name || ''} ${user?.last_name || ''}`.trim() ||
+    user?.username ||
+    'Usuario';
+
+  const areaPuesto =
+    [user?.area_id, user?.puesto].filter(Boolean).join(' - ') || 'Sin Asignación';
+
+  const emailUsuario =
+    user?.email || user?.correo || (user?.username ? `${user.username}@surgicorperu.com` : '—');
+
+  const empresaUsuario = user?.empresa || user?.empr_id || 'SURGICORP S.R.L.';
+  const esAdmin = Boolean(user?.is_staff || user?.is_superuser);
 
   return (
     <header className="bg-white/90 backdrop-blur-md border-b border-gray-100 h-20 md:h-24 flex items-center justify-between px-6 md:px-10 sticky top-0 z-40 transition-premium shadow-sm">
@@ -100,9 +135,9 @@ const Header = () => {
         <button
           onClick={() => navigate('/nueva-solicitud')}
           title="Crear Nueva Rendición"
-          className="flex items-center gap-1.5 sm:gap-2 bg-gradient-to-r from-brand-primary to-brand-secondary text-white font-black text-xs px-3 py-2 sm:px-4 sm:py-2.5 rounded-xl sm:rounded-2xl shadow-md shadow-brand-primary/25 hover:shadow-lg hover:shadow-brand-primary/35 hover:scale-105 active:scale-95 transition-all group"
+          className="flex items-center justify-center gap-1.5 sm:gap-2 bg-gradient-to-r from-brand-primary to-brand-secondary text-white font-black text-xs px-2.5 py-2 sm:px-4 sm:py-2.5 rounded-xl sm:rounded-2xl shadow-md shadow-brand-primary/25 hover:shadow-lg hover:shadow-brand-primary/35 hover:scale-105 active:scale-95 transition-all group shrink-0"
         >
-          <PlusCircle size={18} className="transition-transform group-hover:rotate-90 duration-300" />
+          <Plus size={22} strokeWidth={3} className="w-5 h-5 sm:w-4 sm:h-4 transition-transform group-hover:rotate-90 duration-300 shrink-0" />
           <span className="hidden sm:inline tracking-wider">NUEVA RENDICIÓN</span>
         </button>
 
@@ -121,57 +156,100 @@ const Header = () => {
         {/* Separador */}
         <div className="h-8 w-[1px] bg-gray-100 hidden md:block"></div>
 
-        {/* Perfil de Usuario Premium */}
-        <div className="relative">
+        {/* Perfil de Usuario - Modelo Unificado Surgicorp */}
+        <div className="relative" ref={perfilContenedorRef}>
           <button
             onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-            className="flex items-center gap-4 p-1 rounded-2xl hover:bg-brand-light transition-premium group focus:outline-none"
+            className="flex items-center gap-2.5 p-1 rounded-xl hover:bg-brand-light/70 transition-all group focus:outline-none"
+            aria-label="Menú de usuario"
+            aria-expanded={isDropdownOpen}
           >
-            <div className="flex flex-col items-end leading-tight text-right hidden sm:flex">
-              <span className="text-[18px] font-black text-brand-dark group-hover:text-brand-primary transition-premium tracking-tight">
-                {user?.nombre || 'Nombre de Usuario'}
-              </span>
-              <span className="text-[14px] text-gray-400 font-medium mt-0.5">
-                {user?.area || 'Área'} • {user?.puesto || 'Puesto'}
-              </span>
+            {/* Avatar circular con borde fino */}
+            <div className="w-9 h-9 rounded-full border-2 border-white ring-2 ring-brand-primary/25 overflow-hidden bg-brand-light flex items-center justify-center shrink-0 shadow-sm transition-transform group-hover:scale-105">
+              {user?.avatar ? (
+                <img src={user.avatar} alt={nombreCompleto} className="w-full h-full object-cover" />
+              ) : (
+                <User size={18} className="text-brand-primary" />
+              )}
             </div>
 
-            <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-brand-primary to-brand-secondary p-[2px] shadow-lg group-hover:shadow-brand-primary/20 transition-premium rotate-3 group-hover:rotate-0">
-              <div className="w-full h-full rounded-[14px] bg-white flex items-center justify-center overflow-hidden">
-                {user?.avatar ? (
-                  <img src={user.avatar} alt="Avatar" className="w-full h-full object-cover" />
-                ) : (
-                  <User size={20} className="text-brand-primary" />
-                )}
+            {/* Nombre y Badge de Área - Puesto */}
+            <div className="flex flex-col items-start leading-tight text-left hidden sm:flex">
+              <div className="flex items-center gap-1.5">
+                <span className="text-sm font-bold text-brand-dark group-hover:text-brand-primary transition-colors tracking-tight truncate max-w-[160px] md:max-w-[200px]">
+                  {nombreCompleto}
+                </span>
+                <ChevronDown
+                  size={14}
+                  className={`text-gray-400 group-hover:text-brand-primary transition-transform duration-300 ${
+                    isDropdownOpen ? 'rotate-180' : ''
+                  }`}
+                />
               </div>
+              <span className="mt-0.5 px-2 py-0.5 rounded-full text-[9.5px] font-bold bg-brand-light text-brand-primary border border-brand-primary/20 truncate max-w-[160px] md:max-w-[200px]">
+                {areaPuesto}
+              </span>
             </div>
 
+            {/* Chevron solo visible en móvil cuando el texto está oculto */}
             <ChevronDown
-              size={14}
-              className={`text-gray-400 transition-transform duration-500 ${isDropdownOpen ? 'rotate-180' : ''}`}
+              size={13}
+              className={`text-gray-400 sm:hidden transition-transform duration-300 ${
+                isDropdownOpen ? 'rotate-180' : ''
+              }`}
             />
           </button>
 
-          {/* Menú Desplegable Premium */}
+          {/* Tarjeta Desplegable del Perfil: Ancho ajustado al control en desktop */}
           {isDropdownOpen && (
-            <div className="absolute right-0 mt-4 w-60 bg-white rounded-2xl shadow-2xl border border-gray-50 py-3 z-50 animate-slide-up">
-              <div className="px-5 py-3 border-b border-gray-50 mb-2 md:hidden">
-                <span className="text-sm font-bold text-brand-dark">{user?.nombre}</span>
-                <p className="text-xs text-brand-primary font-bold">{user?.puesto}</p>
+            <div className="absolute right-0 sm:left-0 sm:right-0 mt-1.5 w-60 sm:w-full bg-white rounded-xl shadow-xl border border-gray-100 p-3 z-50 animate-slide-up select-none">
+              {/* Información Detallada del Usuario Compacta */}
+              <div className="flex flex-col text-left">
+                <h3 className="text-sm font-bold text-slate-800 leading-tight tracking-tight truncate" title={nombreCompleto}>
+                  {nombreCompleto}
+                </h3>
+                <p className="text-[12.5px] text-slate-500 font-medium mt-0.5 leading-tight truncate" title={areaPuesto}>
+                  {areaPuesto}
+                </p>
+                <a
+                  href={`mailto:${emailUsuario}`}
+                  className="text-[12.5px] text-brand-primary hover:underline font-semibold mt-1 truncate block"
+                  title={emailUsuario}
+                >
+                  {emailUsuario}
+                </a>
+                <p className="text-[12px] font-black text-brand-primary uppercase tracking-wide mt-1 truncate" title={empresaUsuario}>
+                  {empresaUsuario}
+                </p>
               </div>
 
-              <button className="w-full flex items-center gap-3 px-5 py-3 text-gray-600 hover:bg-brand-light hover:text-brand-primary transition-premium text-sm font-semibold">
-                <User size={16} />
-                Mi Perfil
-              </button>
+              {/* Separador Compacto */}
+              <div className="border-t border-gray-100 my-2"></div>
 
-              <button
-                onClick={handleLogout}
-                className="w-full flex items-center gap-3 px-5 py-3 text-red-500 hover:bg-red-50 transition-premium text-sm font-bold mt-2"
-              >
-                <LogOut size={16} />
-                Cerrar Sesión
-              </button>
+              {/* Acciones Compactas */}
+              <div className="flex flex-col gap-0.5">
+                {/* Botón de Administrador (visible solo si is_staff o is_superuser) */}
+                {esAdmin && (
+                  <a
+                    href="https://appsurgicorperu.com/admin"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="w-full flex items-center gap-2 px-2.5 py-1.5 text-sm font-semibold text-slate-700 hover:text-brand-primary hover:bg-brand-light rounded-lg transition-all group"
+                  >
+                    <Settings size={16} className="text-slate-400 group-hover:text-brand-primary transition-colors shrink-0" />
+                    <span>Administrador</span>
+                  </a>
+                )}
+
+                {/* Botón Cerrar Sesión */}
+                <button
+                  onClick={handleLogout}
+                  className="w-full flex items-center gap-2 px-2.5 py-1.5 text-sm font-bold text-red-600 hover:bg-red-50 rounded-lg transition-all group text-left"
+                >
+                  <LogOut size={16} className="text-red-500 group-hover:translate-x-0.5 transition-transform shrink-0" />
+                  <span>Cerrar Sesión</span>
+                </button>
+              </div>
             </div>
           )}
         </div>

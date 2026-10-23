@@ -183,6 +183,7 @@ El modelo `RC_SubGasto` contiene banderas booleanas que le indican al Frontend *
 | `/RC_Entidades/` | `GET` | Sedes/Hospitales (Origen, Destino y Entidad única) | `?search=REBAGLIATI` |
 | `/RC_TipoGasto/` | `GET` | Grupos generales de gasto | `?is_aux=true` |
 | `/RC_Provincia/` | `GET` | Catálogo de provincias | `?top=100` |
+| `/RC_Placas/` | `GET` | Catálogo de placas y choferes de unidades de transporte | `?search=ABC` (o `?top=100`) |
 
 ---
 
@@ -221,6 +222,12 @@ export interface EntidadSedeItem {
   tipo_sede: EstadoObjeto;
 }
 
+export interface RCPlacaItem {
+  id: number;
+  placa: string;
+  chofer?: string;
+}
+
 export interface RCDetalleItem {
   id?: number;
   requerimiento_id: number | string;
@@ -228,7 +235,8 @@ export interface RCDetalleItem {
   lima_provincia: 'L' | 'P';
   provincia_id?: number | string;
   costo: number | string;
-  placa?: string;
+  placa_id?: number | string | RCPlacaItem;
+  placa_nombre?: string;
   nro_factura?: string;
   nro_ruc?: string;
   origen?: number | string; // Se usa para 'origen' en taxis y para 'entidad' en gastos únicos
@@ -727,4 +735,3 @@ export const ModalRegistrarGasto: React.FC<Props> = ({
        );
      };
      ```
-

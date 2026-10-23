@@ -105,6 +105,85 @@ const extraerSubgastoUrl = (sub) => {
   return null;
 };
 
+const extraerEmpresaId = (emp) => {
+  if (!emp) return null;
+  if (typeof emp === 'number') return emp;
+  if (typeof emp === 'object') return emp.id || extraerId(emp.url) || null;
+  if (typeof emp === 'string') {
+    const id = extraerId(emp);
+    return id ? parseInt(id, 10) : null;
+  }
+  return null;
+};
+
+const extraerEmpresaUrl = (emp) => {
+  if (!emp) return null;
+  if (typeof emp === 'string' && emp.startsWith('http')) return emp;
+  const id = extraerEmpresaId(emp);
+  return id ? `${API_URL}/Empresa/${id}/` : null;
+};
+
+const extraerPlacaId = (p) => {
+  if (!p) return null;
+  if (typeof p === 'number') return p;
+  if (typeof p === 'object') return p.id || extraerId(p.url) || null;
+  if (typeof p === 'string') {
+    const id = extraerId(p);
+    return id ? parseInt(id, 10) : null;
+  }
+  return null;
+};
+
+const extraerPlacaUrl = (p) => {
+  if (!p) return null;
+  if (typeof p === 'string' && p.startsWith('http')) return p;
+  const id = extraerPlacaId(p);
+  return id ? `${API_URL}/RC_Placas/${id}/` : null;
+};
+
+/**
+ * Envía una petición de detalle (POST o PATCH) con reintento automático
+ * ante interbloqueos (deadlocks) de SQL Server (Error 1205).
+ */
+const enviarPeticionDetalleConReintento = async (url, options, maxReintentos = 2) => {
+  for (let intento = 0; intento <= maxReintentos; intento++) {
+    try {
+      const res = await fetchAuth(url, options);
+      if (res.ok) return res;
+
+      // Clonar respuesta para poder leer su texto sin agotar el body del response original
+      const resClon = res.clone();
+      const errorTexto = await extraerMensajeError(resClon);
+      const esDeadlock =
+        errorTexto.includes('1205') ||
+        errorTexto.toLowerCase().includes('interbloqueo') ||
+        errorTexto.toLowerCase().includes('deadlock');
+
+      if (esDeadlock && intento < maxReintentos) {
+        console.warn(`[Guardar Detalle] Interbloqueo detectado en SQL Server (intento ${intento + 1}/${maxReintentos + 1}). Reintentando en ${(intento + 1) * 350}ms...`);
+        await new Promise((r) => setTimeout(r, (intento + 1) * 350));
+        continue;
+      }
+
+      // Devolver res para que el llamador formatee el error con el número de comprobante
+      return res;
+    } catch (err) {
+      const esDeadlock =
+        err.message &&
+        (err.message.includes('1205') ||
+          err.message.toLowerCase().includes('interbloqueo') ||
+          err.message.toLowerCase().includes('deadlock'));
+
+      if (esDeadlock && intento < maxReintentos) {
+        console.warn(`[Guardar Detalle] Interbloqueo detectado en SQL Server (intento ${intento + 1}/${maxReintentos + 1}). Reintentando en ${(intento + 1) * 350}ms...`);
+        await new Promise((r) => setTimeout(r, (intento + 1) * 350));
+        continue;
+      }
+      throw err;
+    }
+  }
+};
+
 /**
  * Mapea los detalles recibidos del backend para el sub-wizard de gastos.
  */
@@ -116,6 +195,10 @@ const mapearDetallesExistentes = (detallesLista) => {
     const subgastoUrl = extraerSubgastoUrl(d.subgasto_id) || (subgastoObj?.id ? `${API_URL}/RC_SubGasto/${subgastoObj.id}/` : null);
     const tipogastoUrl = subgastoObj?.tipogasto_id?.url || (subgastoObj?.tipogasto_id?.id ? `${API_URL}/RC_TipoGasto/${subgastoObj.tipogasto_id.id}/` : null);
 
+    const placaId = d.placa_detalle?.id || (typeof d.placa_id === 'object' ? d.placa_id?.id : extraerPlacaId(d.placa_id)) || null;
+    const placaTexto = d.placa || d.placa_detalle?.placa || d.placa_nombre || '';
+    const placaNombre = d.placa_nombre || (d.placa_detalle?.chofer ? `${d.placa_detalle.placa} - ${d.placa_detalle.chofer}` : placaTexto);
+
     return {
       id: idNum,
       url: d.url || (idNum ? `${API_URL}/RC_Detalle/${idNum}/` : null),
@@ -124,10 +207,12 @@ const mapearDetallesExistentes = (detallesLista) => {
       subgasto_obj: subgastoObj,
       lima_provincia: d.lima_provincia || 'L',
       provincia_url: extraerProvinciaUrl(d.provincia_id),
-      empresa_id: d.empresa_id || (typeof d.empresa === 'object' ? d.empresa?.id : d.empresa) || null,
+      empresa_id: extraerEmpresaId(d.empresa_id !== undefined ? d.empresa_id : d.empresa),
       nro_factura: d.nro_factura || '',
       nro_ruc: d.nro_ruc || '',
-      placa: d.placa || '',
+      placa_id: placaId,
+      placa: placaTexto,
+      placa_nombre: placaNombre,
       origen_url: extraerEntidadUrl(d.origen),
       destino_url: extraerEntidadUrl(d.destino),
       costo: d.costo || '',
@@ -144,19 +229,28 @@ const mapearDetallesExistentes = (detallesLista) => {
  */
 const extraerMensajeError = async (respuesta) => {
   try {
-    const datosJson = await respuesta.json();
-    if (datosJson.detail && datosJson.error_tecnico) {
-      return `${datosJson.detail}\nDetalle técnico: ${datosJson.error_tecnico}`;
+    const texto = await respuesta.text();
+    try {
+      const datosJson = JSON.parse(texto);
+      if (datosJson.mensaje_personalizado) {
+        const tecnico = datosJson.error_tecnico ? `\nDetalle técnico: ${datosJson.error_tecnico}` : '';
+        return `${datosJson.mensaje_personalizado}${tecnico}`;
+      }
+      if (datosJson.detail && datosJson.error_tecnico) {
+        return `${datosJson.detail}\nDetalle técnico: ${datosJson.error_tecnico}`;
+      }
+      if (datosJson.detail) return datosJson.detail;
+      if (datosJson.error) return datosJson.error;
+      if (typeof datosJson === 'object') {
+        const primerError = Object.entries(datosJson)
+          .map(([campo, msg]) => `${campo}: ${Array.isArray(msg) ? msg.join(', ') : msg}`)
+          .join(' | ');
+        if (primerError) return primerError;
+      }
+      return JSON.stringify(datosJson);
+    } catch {
+      return texto.length > 250 ? texto.slice(0, 250) + '...' : texto;
     }
-    if (datosJson.detail) return datosJson.detail;
-    if (datosJson.error) return datosJson.error;
-    if (typeof datosJson === 'object') {
-      const primerError = Object.entries(datosJson)
-        .map(([campo, msg]) => `${campo}: ${Array.isArray(msg) ? msg.join(', ') : msg}`)
-        .join(' | ');
-      if (primerError) return primerError;
-    }
-    return JSON.stringify(datosJson);
   } catch {
     return `Error de servidor (${respuesta.status})`;
   }
@@ -193,7 +287,7 @@ const validarParaLiquidacion = (cabecera, detalles, montoFinal, totalGastos) => 
     }
 
     if (!d.adj_cajachica) {
-      return `El comprobante #${nro} no tiene adjunto el ticket o foto obligatoria.`;
+      return `El comprobante #${nro} (${d.detalle || 'Gasto'}) no tiene adjunto el comprobante o foto obligatoria. Para liquidar debe actualizar el registro con el adjunto correspondiente.`;
     }
   }
 
@@ -332,10 +426,12 @@ const NewRequest = () => {
         // Crear nuevos comprobantes o actualizar modificados
         const requerimientoUrl = cabecera.url || `${API_URL}/Requerimiento_CajaChica/${idReqExistente}/`;
 
-        const promesasDetalles = detalles.map(async (det, idx) => {
+        const detallesSincronizados = [];
+        for (let idx = 0; idx < detalles.length; idx++) {
+          const det = detalles[idx];
           const idDetalle = extraerId(det.id || det.url);
           const esNuevo = !idDetalle;
-          const tieneArchivoNuevo = det.adj_cajachica instanceof File;
+          const tieneArchivoNuevo = det.adj_cajachica instanceof File || det.adj_cajachica instanceof Blob;
           const subUrl = det.subgasto_url || extraerSubgastoUrl(det.subgasto_obj);
           const provUrl = det.lima_provincia === 'P' ? (det.provincia_url || extraerProvinciaUrl(det.provincia_id)) : null;
           const origUrl = det.origen_url || extraerEntidadUrl(det.origen);
@@ -350,8 +446,16 @@ const NewRequest = () => {
           if (provUrl) formData.append('provincia_id', provUrl);
           if (det.nro_factura) formData.append('nro_factura', det.nro_factura);
           if (det.nro_ruc) formData.append('nro_ruc', det.nro_ruc);
-          if (det.empresa_id) formData.append('empresa_id', String(det.empresa_id));
-          if (det.placa) formData.append('placa', det.placa);
+          const empUrl = extraerEmpresaUrl(det.empresa_id);
+          if (empUrl) {
+            formData.append('empresa_id', empUrl);
+          }
+          const placaUrl = extraerPlacaUrl(det.placa_id);
+          if (placaUrl) {
+            formData.append('placa_id', placaUrl);
+          } else if (det.placa_id) {
+            formData.append('placa_id', String(det.placa_id));
+          }
           if (origUrl) formData.append('origen', origUrl);
           if (destUrl) formData.append('destino', destUrl);
 
@@ -363,9 +467,10 @@ const NewRequest = () => {
             formData.append('adj_cajachica', det.adj_cajachica);
           }
 
+          let itemSincronizado;
           if (esNuevo) {
-            // Creación de nueva fila de comprobante
-            const resDet = await fetchAuth(`${API_URL}/RC_Detalle/?format=json`, {
+            // Creación secuencial con reintento ante interbloqueos (Error 1205)
+            const resDet = await enviarPeticionDetalleConReintento(`${API_URL}/RC_Detalle/?format=json`, {
               method: 'POST',
               body: formData,
             });
@@ -375,7 +480,7 @@ const NewRequest = () => {
             }
             const datosCreados = await resDet.json();
             const nuevoId = datosCreados.id || extraerId(datosCreados.url);
-            return {
+            itemSincronizado = {
               ...det,
               id: nuevoId,
               url: datosCreados.url || (nuevoId ? `${API_URL}/RC_Detalle/${nuevoId}/` : null),
@@ -383,8 +488,8 @@ const NewRequest = () => {
               _preview: datosCreados.adj_cajachica || det._preview,
             };
           } else {
-            // Actualización de comprobante existente vía PATCH
-            const resDet = await fetchAuth(`${API_URL}/RC_Detalle/${idDetalle}/?format=json`, {
+            // Actualización secuencial con reintento ante interbloqueos
+            const resDet = await enviarPeticionDetalleConReintento(`${API_URL}/RC_Detalle/${idDetalle}/?format=json`, {
               method: 'PATCH',
               body: formData,
             });
@@ -393,7 +498,7 @@ const NewRequest = () => {
               throw new Error(`Comprobante #${idx + 1}: ${err}`);
             }
             const datosActualizados = await resDet.json();
-            return {
+            itemSincronizado = {
               ...det,
               id: idDetalle,
               url: det.url || `${API_URL}/RC_Detalle/${idDetalle}/`,
@@ -401,10 +506,11 @@ const NewRequest = () => {
               _preview: datosActualizados.adj_cajachica || det._preview,
             };
           }
-        });
 
-        const detallesSincronizados = await Promise.all(promesasDetalles);
-        setDetalles(detallesSincronizados);
+          detallesSincronizados.push(itemSincronizado);
+          // Sincronización progresiva: si falla un comprobante posterior, los anteriores ya quedan con ID y no se duplicarán
+          setDetalles([...detallesSincronizados, ...detalles.slice(idx + 1)]);
+        }
 
         // 3. Transición final a Liquidado (LQ) solo después de haber guardado todos los detalles
         if (estadoDestino === 'LQ') {
@@ -458,9 +564,21 @@ const NewRequest = () => {
         const requerimientoId = requerimientoCreado.id || extraerId(requerimientoCreado.url);
         const requerimientoUrl = requerimientoCreado.url || `${API_URL}/Requerimiento_CajaChica/${requerimientoId}/`;
 
-        // Registrar cada detalle asociado al requerimiento recién creado
+        // Actualizar el estado de la cabecera para que cualquier reintento opere como edición
+        setCabecera((prev) => ({
+          ...prev,
+          id: requerimientoId,
+          url: requerimientoUrl,
+        }));
+
+        // Registrar o actualizar cada detalle asociado al requerimiento recién creado de forma secuencial
         if (detalles.length > 0) {
-          const promesasDetalles = detalles.map(async (det, idx) => {
+          const detallesSincronizados = [];
+          for (let idx = 0; idx < detalles.length; idx++) {
+            const det = detalles[idx];
+            const idDetalle = extraerId(det.id || det.url);
+            const esNuevo = !idDetalle;
+            const tieneArchivoNuevo = det.adj_cajachica instanceof File || det.adj_cajachica instanceof Blob;
             const subUrl = det.subgasto_url || extraerSubgastoUrl(det.subgasto_obj);
             const provUrl = det.lima_provincia === 'P' ? (det.provincia_url || extraerProvinciaUrl(det.provincia_id)) : null;
             const origUrl = det.origen_url || extraerEntidadUrl(det.origen);
@@ -475,8 +593,16 @@ const NewRequest = () => {
             if (provUrl) formData.append('provincia_id', provUrl);
             if (det.nro_factura) formData.append('nro_factura', det.nro_factura);
             if (det.nro_ruc) formData.append('nro_ruc', det.nro_ruc);
-            if (det.empresa_id) formData.append('empresa_id', String(det.empresa_id));
-            if (det.placa) formData.append('placa', det.placa);
+            const empUrl = extraerEmpresaUrl(det.empresa_id);
+            if (empUrl) {
+              formData.append('empresa_id', empUrl);
+            }
+            const placaUrl = extraerPlacaUrl(det.placa_id);
+            if (placaUrl) {
+              formData.append('placa_id', placaUrl);
+            } else if (det.placa_id) {
+              formData.append('placa_id', String(det.placa_id));
+            }
             if (origUrl) formData.append('origen', origUrl);
             if (destUrl) formData.append('destino', destUrl);
 
@@ -484,33 +610,58 @@ const NewRequest = () => {
             formData.append('detalle', det.detalle || '');
             formData.append('fecha_gasto', det.fecha_gasto || '');
 
-            if (det.adj_cajachica) {
+            // Solo adjuntar si es realmente un archivo binario nuevo (File o Blob).
+            // NUNCA enviar cadenas de texto o URLs ya existentes a un FileField de DRF.
+            if (tieneArchivoNuevo) {
               formData.append('adj_cajachica', det.adj_cajachica);
             }
 
-            const resDet = await fetchAuth(`${API_URL}/RC_Detalle/?format=json`, {
-              method: 'POST',
-              body: formData,
-            });
+            let itemSincronizado;
+            if (esNuevo) {
+              const resDet = await enviarPeticionDetalleConReintento(`${API_URL}/RC_Detalle/?format=json`, {
+                method: 'POST',
+                body: formData,
+              });
 
-            if (!resDet.ok) {
-              const errorDet = await extraerMensajeError(resDet);
-              throw new Error(`Comprobante #${idx + 1}: ${errorDet}`);
+              if (!resDet.ok) {
+                const errorDet = await extraerMensajeError(resDet);
+                throw new Error(`Comprobante #${idx + 1}: ${errorDet}`);
+              }
+
+              const datosCreados = await resDet.json();
+              const nuevoId = datosCreados.id || extraerId(datosCreados.url);
+              itemSincronizado = {
+                ...det,
+                id: nuevoId,
+                url: datosCreados.url || (nuevoId ? `${API_URL}/RC_Detalle/${nuevoId}/` : null),
+                adj_cajachica: datosCreados.adj_cajachica || det.adj_cajachica,
+                _preview: datosCreados.adj_cajachica || det._preview,
+              };
+            } else {
+              const resDet = await enviarPeticionDetalleConReintento(`${API_URL}/RC_Detalle/${idDetalle}/?format=json`, {
+                method: 'PATCH',
+                body: formData,
+              });
+
+              if (!resDet.ok) {
+                const errorDet = await extraerMensajeError(resDet);
+                throw new Error(`Comprobante #${idx + 1}: ${errorDet}`);
+              }
+
+              const datosActualizados = await resDet.json();
+              itemSincronizado = {
+                ...det,
+                id: idDetalle,
+                url: det.url || `${API_URL}/RC_Detalle/${idDetalle}/`,
+                adj_cajachica: datosActualizados.adj_cajachica || det.adj_cajachica,
+                _preview: datosActualizados.adj_cajachica || det._preview,
+              };
             }
 
-            const datosCreados = await resDet.json();
-            const nuevoId = datosCreados.id || extraerId(datosCreados.url);
-            return {
-              ...det,
-              id: nuevoId,
-              url: datosCreados.url || (nuevoId ? `${API_URL}/RC_Detalle/${nuevoId}/` : null),
-              adj_cajachica: datosCreados.adj_cajachica || det.adj_cajachica,
-              _preview: datosCreados.adj_cajachica || det._preview,
-            };
-          });
-
-          const detallesSincronizados = await Promise.all(promesasDetalles);
-          setDetalles(detallesSincronizados);
+            detallesSincronizados.push(itemSincronizado);
+            // Sincronizar progresivamente el estado con los IDs asignados
+            setDetalles([...detallesSincronizados, ...detalles.slice(idx + 1)]);
+          }
         }
 
         // Si el usuario eligió Enviar y Liquidar, ejecutar la liquidación ahora que ya existen los detalles
