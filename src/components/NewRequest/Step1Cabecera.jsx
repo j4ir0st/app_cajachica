@@ -5,6 +5,7 @@ import { useCatalogoStore } from '../../store/catalogoStore';
 import { fetchAuth } from '../../utils/fetchAuth';
 import { CLAVES_CATALOGO, guardarEnCache, leerDeCache } from '../../utils/catalogoCache';
 import { obtenerTipoCaja, LISTA_EMPRESAS } from '../../utils/tipoCaja';
+import { tieneRangoGerencial, obtenerPuestoLimpio } from '../../utils/permisos';
 import Combobox from '../Combobox';
 
 const API_URL = import.meta.env.DEV ? '' : import.meta.env.VITE_API_URL;
@@ -39,19 +40,19 @@ const Step1Cabecera = ({ datos, onChange }) => {
   const { user, updateUser } = useUserStore();
   const { empresas } = useCatalogoStore();
 
-  // Roles según el campo puesto del usuario logueado (en login viene directo en user.puesto)
-  const puestoLower = (user?.puesto || '').toLowerCase().trim();
+  // Roles según el campo puesto del usuario logueado con normalización robusta
+  const puestoLimpio = obtenerPuestoLimpio(user);
 
   // 1. Gerente o Superusuario: Ve TODOS los usuarios activos y ve el subtítulo de área y puesto
   const esGerenteOSuperuser = Boolean(
-    user?.is_superuser || puestoLower.includes('gerente')
+    user?.is_superuser || tieneRangoGerencial(user) || puestoLimpio.includes('gerente')
   );
 
   // 2. Jefe, Coordinador o Supervisor (y Administrador / is_staff): Ve los usuarios de su área (sin subtítulo)
   const esMandoArea = Boolean(
-    puestoLower.includes('jefe') ||
-    puestoLower.includes('coordinador') ||
-    puestoLower.includes('supervisor') ||
+    puestoLimpio.includes('jefe') ||
+    puestoLimpio.includes('coordinador') ||
+    puestoLimpio.includes('supervisor') ||
     user?.is_staff
   );
 

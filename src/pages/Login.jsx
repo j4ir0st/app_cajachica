@@ -42,8 +42,28 @@ const Login = () => {
         throw new Error('No se pudo obtener la información del perfil del usuario.');
       }
 
-      // 2. Estructuramos los datos para el store
-      // Mapeamos los datos para que coincidan con lo que espera el resto de la app
+      // 2. Estructuramos los datos para el store con extracción profunda de puesto y área
+      const puestoDetectado =
+        (typeof rawUser.puesto_id === 'object' && rawUser.puesto_id ? (rawUser.puesto_id.nombre || rawUser.puesto_id.puesto_nombre) : null) ||
+        rawUser.area_puesto?.puesto_nombre ||
+        rawUser.puesto_nombre ||
+        (typeof rawUser.puesto === 'object' && rawUser.puesto ? (rawUser.puesto.nombre || rawUser.puesto.puesto_nombre) : null) ||
+        (typeof rawUser.puesto === 'string' && rawUser.puesto !== 'Sin Puesto' ? rawUser.puesto : null) ||
+        (typeof rawUser.cargo === 'object' && rawUser.cargo ? rawUser.cargo.nombre : rawUser.cargo) ||
+        rawUser.rol ||
+        rawUser.puesto ||
+        'Sin Puesto';
+
+      const areaDetectada =
+        (typeof rawUser.area_id === 'object' && rawUser.area_id ? (rawUser.area_id.nombre || rawUser.area_id.area_nombre) : null) ||
+        rawUser.area_puesto?.area_nombre ||
+        rawUser.area_nombre ||
+        (typeof rawUser.area === 'object' && rawUser.area ? (rawUser.area.nombre || rawUser.area.area_nombre) : null) ||
+        (typeof rawUser.area === 'string' && rawUser.area !== 'Sin Área' ? rawUser.area : null) ||
+        (typeof rawUser.area_id === 'string' && !rawUser.area_id.startsWith('http') && isNaN(Number(rawUser.area_id)) ? rawUser.area_id : null) ||
+        rawUser.area ||
+        'Sin Área';
+
       const userData = {
         id: rawUser.id,
         username: rawUser.username,
@@ -51,9 +71,12 @@ const Login = () => {
         full_name: rawUser.full_name || `${rawUser.first_name || ''} ${rawUser.last_name || ''}`.trim() || rawUser.username,
         email: rawUser.email,
         correo: rawUser.email,
-        puesto: rawUser.puesto || 'Sin Puesto',
-        area: rawUser.area || 'Sin Área',
-        area_id: rawUser.area_id || 'Sin Área',
+        puesto: puestoDetectado,
+        puesto_id: rawUser.puesto_id,
+        area: areaDetectada,
+        area_id: rawUser.area_id,
+        area_puesto: rawUser.area_puesto,
+        groups: Array.isArray(rawUser.groups) ? rawUser.groups : [],
         empresa: rawUser.empr_id || rawUser.empresa || rawUser.empresa_nombre || 'SURGICORP S.R.L.',
         empr_id: rawUser.empr_id || rawUser.empresa || rawUser.empresa_nombre || 'SURGICORP S.R.L.',
         avatar: rawUser.avatar || null,

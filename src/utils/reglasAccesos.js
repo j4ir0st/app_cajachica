@@ -21,19 +21,69 @@ export const normalizarTexto = (texto) => {
     .trim();
 };
 
+const extraerTextoDeCampo = (campo) => {
+  if (!campo) return '';
+  if (typeof campo === 'string') return campo.trim();
+  if (typeof campo === 'object') {
+    return (
+      campo.nombre ||
+      campo.puesto_nombre ||
+      campo.area_nombre ||
+      campo.name ||
+      campo.descripcion ||
+      ''
+    ).trim();
+  }
+  return String(campo).trim();
+};
+
 /**
- * Obtiene el área textual del usuario con prioridad en el campo `area`.
+ * Obtiene el área textual del usuario con soporte para objetos y serializers de DRF.
  */
 export const obtenerAreaUsuario = (user) => {
   if (!user) return '';
+
+  const candidatos = [
+    extraerTextoDeCampo(user.area_id),
+    user.area_puesto?.area_nombre,
+    user.area_puesto?.area,
+    user.area_nombre,
+    extraerTextoDeCampo(user.area),
+  ];
+
+  for (const c of candidatos) {
+    if (c && typeof c === 'string' && c.trim() && c.trim() !== 'Sin Área') {
+      if (!c.startsWith('http') && !c.startsWith('/') && isNaN(Number(c))) {
+        return c.trim();
+      }
+    }
+  }
+
   return String(user.area || user.area_nombre || user.area_id || '').trim();
 };
 
 /**
- * Obtiene el puesto textual del usuario.
+ * Obtiene el puesto textual del usuario con soporte para objetos y serializers de DRF.
  */
 export const obtenerPuestoUsuario = (user) => {
   if (!user) return '';
+
+  const candidatos = [
+    extraerTextoDeCampo(user.puesto_id),
+    user.area_puesto?.puesto_nombre,
+    user.area_puesto?.puesto,
+    user.puesto_nombre,
+    extraerTextoDeCampo(user.puesto),
+    extraerTextoDeCampo(user.cargo),
+    extraerTextoDeCampo(user.rol),
+  ];
+
+  for (const c of candidatos) {
+    if (c && typeof c === 'string' && c.trim() && c.trim() !== 'Sin Puesto') {
+      return c.trim();
+    }
+  }
+
   return String(user.puesto || user.cargo || user.rol || '').trim();
 };
 
@@ -45,16 +95,35 @@ export const obtenerPuestoUsuario = (user) => {
 export const esGerenteOperaciones = (user) => {
   if (!user) return false;
   if (user.is_superuser) return true;
+
   const p = normalizarTexto(obtenerPuestoUsuario(user));
   const a = normalizarTexto(obtenerAreaUsuario(user));
-  const esGerente = p.includes('gerente') || p.includes('gerencia');
-  if (!esGerente) return false;
-  return (
-    p.includes('gerente de operaciones') ||
-    p.includes('gerente general') ||
-    a.includes('operacion') ||
-    p.includes('operacion')
-  );
+  const u = normalizarTexto(user.username || '');
+
+  const grupos = Array.isArray(user.groups) ? user.groups : [];
+  const tieneGrupoGerencial = grupos.some((g) => {
+    const gt = normalizarTexto(typeof g === 'object' ? (g.name || g.nombre || '') : g);
+    return gt.includes('gerente') || gt.includes('gerencia');
+  });
+
+  const esGerente = p.includes('gerente') || p.includes('gerencia') || tieneGrupoGerencial;
+
+  if (p.includes('gerente general') || p.includes('gerencia general')) return true;
+
+  if (esGerente && (p.includes('operacion') || p.includes('operaciones'))) return true;
+  if (esGerente && (a.includes('operacion') || a.includes('operaciones'))) return true;
+
+  if (p === 'operaciones' || p === 'operacion') return true;
+  if (
+    u === 'operaciones' ||
+    u === 'goperaciones' ||
+    u.includes('gerente operaciones') ||
+    u.includes('gerente_operaciones')
+  ) {
+    return true;
+  }
+
+  return false;
 };
 
 /**

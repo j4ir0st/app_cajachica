@@ -38,24 +38,111 @@ export const esAdminStaff = (user) => {
 };
 
 /**
- * Obtiene el puesto o cargo normalizado del usuario.
+ * Extrae de manera segura el nombre o texto de un campo de usuario que puede venir como string o como objeto serializado (DRF).
+ */
+const extraerTextoDeCampo = (campo) => {
+  if (!campo) return '';
+  if (typeof campo === 'string') return campo.trim();
+  if (typeof campo === 'object') {
+    return (
+      campo.nombre ||
+      campo.puesto_nombre ||
+      campo.area_nombre ||
+      campo.name ||
+      campo.descripcion ||
+      ''
+    ).trim();
+  }
+  return String(campo).trim();
+};
+
+/**
+ * Obtiene el puesto o cargo normalizado del usuario evaluando múltiples fuentes:
+ * - user.puesto_id (string u objeto { id, nombre })
+ * - user.area_puesto (objeto { puesto_nombre, area_nombre })
+ * - user.puesto_nombre
+ * - user.puesto (string u objeto)
+ * - user.cargo (string u objeto)
+ * - user.rol (string u objeto)
  */
 export const obtenerPuestoLimpio = (user) => {
   if (!user) return '';
+
+  const candidatos = [
+    extraerTextoDeCampo(user.puesto_id),
+    user.area_puesto?.puesto_nombre,
+    user.area_puesto?.puesto,
+    user.puesto_nombre,
+    extraerTextoDeCampo(user.puesto),
+    extraerTextoDeCampo(user.cargo),
+    extraerTextoDeCampo(user.rol),
+  ];
+
+  for (const c of candidatos) {
+    if (c && typeof c === 'string' && c.trim() && c.trim() !== 'Sin Puesto') {
+      return normalizarTexto(c);
+    }
+  }
+
   return normalizarTexto(user.puesto || user.cargo || user.rol || '');
 };
 
 /**
- * Obtiene el área normalizada del usuario.
+ * Obtiene el área normalizada del usuario evaluando múltiples fuentes:
+ * - user.area_id (string u objeto { id, nombre })
+ * - user.area_puesto (objeto { area_nombre, puesto_nombre })
+ * - user.area_nombre
+ * - user.area (string u objeto)
  */
 export const obtenerAreaLimpia = (user) => {
   if (!user) return '';
-  return normalizarTexto(user.area || user.area_nombre || user.area_id || '');
+
+  const candidatos = [
+    extraerTextoDeCampo(user.area_id),
+    user.area_puesto?.area_nombre,
+    user.area_puesto?.area,
+    user.area_nombre,
+    extraerTextoDeCampo(user.area),
+  ];
+
+  for (const c of candidatos) {
+    if (c && typeof c === 'string' && c.trim() && c.trim() !== 'Sin Área') {
+      // Evitar que URLs tipo "/Area/1/" o solo números sueltos se confundan con nombres de área
+      if (!c.startsWith('http') && !c.startsWith('/') && isNaN(Number(c))) {
+        return normalizarTexto(c);
+      }
+    }
+  }
+
+  const fallback = typeof user.area === 'string' ? user.area : (user.area_nombre || '');
+  return normalizarTexto(fallback);
+};
+
+/**
+ * Determina si el usuario tiene rango o jerarquía gerencial (por puesto, cargo o grupos).
+ */
+export const tieneRangoGerencial = (user) => {
+  if (!user) return false;
+  if (esSuperusuario(user)) return true;
+
+  const puesto = obtenerPuestoLimpio(user);
+  if (puesto.includes('gerente') || puesto.includes('gerencia')) return true;
+
+  // Verificar grupos Django (user.groups)
+  const grupos = Array.isArray(user.groups) ? user.groups : [];
+  for (const g of grupos) {
+    const gTexto = normalizarTexto(typeof g === 'object' ? (g.name || g.nombre || '') : g);
+    if (gTexto.includes('gerente') || gTexto.includes('gerencia')) {
+      return true;
+    }
+  }
+
+  return false;
 };
 
 /**
  * Determina si el usuario corresponde a Gerente de Operaciones o Gerente General.
- * Excluye a administradores generales (is_staff) y a jefaturas (jefe de operaciones).
+ * Excluye a administradores generales comunes (is_staff) y a mandos medios (jefatura/coordinador).
  */
 export const esGerenteOperaciones = (user) => {
   if (!user) return false;
@@ -63,15 +150,35 @@ export const esGerenteOperaciones = (user) => {
 
   const puesto = obtenerPuestoLimpio(user);
   const area = obtenerAreaLimpia(user);
+  const username = normalizarTexto(user.username || '');
+  const esGerente = tieneRangoGerencial(user);
 
-  // Debe ser explícitamente Gerente (no jefatura, no supervisor)
-  const esGerente = puesto.includes('gerente') || puesto.includes('gerencia');
-  if (!esGerente) return false;
+  // 1. Gerente General tiene control total
+  if (puesto.includes('gerente general') || puesto.includes('gerencia general')) return true;
 
-  // Gerente General o Gerente de Operaciones
-  if (puesto.includes('gerente general')) return true;
-  if (puesto.includes('gerente de operaciones') || puesto.includes('gerencia de operaciones')) return true;
-  if (area.includes('operacion') && esGerente) return true;
+  // 2. Coincidencia combinada de Gerente + Operaciones en el puesto
+  // Ej: "gerente de operaciones", "gerencia de operaciones", "gerente operaciones", "gerente de operaciones y logistica"
+  if (esGerente && (puesto.includes('operacion') || puesto.includes('operaciones'))) {
+    return true;
+  }
+
+  // 3. Nivel Gerencial con Área asignada de Operaciones
+  if (esGerente && (area.includes('operacion') || area.includes('operaciones'))) {
+    return true;
+  }
+
+  // 4. Casos especiales del sistema Surgicorp (puesto o cuenta de operaciones):
+  if (puesto === 'operaciones' || puesto === 'operacion') {
+    return true;
+  }
+  if (
+    username === 'operaciones' ||
+    username === 'goperaciones' ||
+    username.includes('gerente operaciones') ||
+    username.includes('gerente_operaciones')
+  ) {
+    return true;
+  }
 
   return false;
 };
@@ -86,8 +193,8 @@ export const esGerenteFinanzas = (user) => {
 
   const puesto = obtenerPuestoLimpio(user);
   const area = obtenerAreaLimpia(user);
+  const esGerente = tieneRangoGerencial(user);
 
-  const esGerente = puesto.includes('gerente') || puesto.includes('gerencia');
   if (!esGerente) return false;
 
   const esFinanciera =
@@ -95,7 +202,8 @@ export const esGerenteFinanzas = (user) => {
     area.includes('finanza') ||
     puesto.includes('administracion y finanzas') ||
     area.includes('administracion') ||
-    area.includes('contabilidad');
+    area.includes('contabilidad') ||
+    puesto.includes('contabilidad');
 
   return esFinanciera;
 };
@@ -117,8 +225,25 @@ export const esNivelGerencia = (user) => {
 export const esRolAprobador = (user) => {
   if (!user) return false;
   if (esSuperusuario(user)) return true;
+  if (esGerenteOperaciones(user)) return true;
 
   const puesto = obtenerPuestoLimpio(user);
+  const esGerente = tieneRangoGerencial(user);
+  if (esGerente) return true;
+
+  // Revisión de grupos
+  const grupos = Array.isArray(user.groups) ? user.groups : [];
+  const tieneGrupoAprobador = grupos.some((g) => {
+    const gt = normalizarTexto(typeof g === 'object' ? (g.name || g.nombre || '') : g);
+    return (
+      gt.includes('aprobador') ||
+      gt.includes('jefe') ||
+      gt.includes('gerente') ||
+      gt.includes('coordinador') ||
+      gt.includes('supervisor')
+    );
+  });
+  if (tieneGrupoAprobador) return true;
 
   return (
     puesto.includes('coordinador') ||

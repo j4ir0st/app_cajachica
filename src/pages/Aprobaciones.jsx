@@ -27,7 +27,8 @@ import {
   ShieldCheck,
   ShieldAlert,
   SlidersHorizontal,
-  CheckSquare
+  CheckSquare,
+  Tag
 } from 'lucide-react';
 import { useUserStore } from '../store/userStore';
 import { useCatalogoStore } from '../store/catalogoStore';
@@ -59,6 +60,40 @@ const obtenerNombreSolicitante = (usuario) => {
   return '—';
 };
 
+/**
+ * Extrae la información del subgasto principal (primer registro de detalle) de un requerimiento
+ * para que el auditor pueda conocer preliminarmente de qué trata el gasto antes de entrar al detalle.
+ */
+const obtenerPrimerSubgasto = (req) => {
+  if (!req) return null;
+  const detalles = req.detalle || req.detalles || [];
+  if (!Array.isArray(detalles) || detalles.length === 0) return null;
+
+  const primer = detalles[0];
+  if (!primer) return null;
+
+  let nombreSubgasto = '';
+  if (typeof primer.subgasto_id === 'object' && primer.subgasto_id) {
+    nombreSubgasto = primer.subgasto_id.nombre || primer.subgasto_id.subgasto_nombre || '';
+  } else if (typeof primer.subgasto_nombre === 'string') {
+    nombreSubgasto = primer.subgasto_nombre;
+  } else if (typeof primer.subgasto === 'string') {
+    nombreSubgasto = primer.subgasto;
+  } else if (typeof primer.subgasto_id === 'string' && !primer.subgasto_id.startsWith('http')) {
+    nombreSubgasto = primer.subgasto_id;
+  }
+
+  const cantidadOtros = detalles.length - 1;
+  const descripcion = (primer.detalle || '').trim();
+
+  return {
+    nombreSubgasto: nombreSubgasto || 'Gasto registrado',
+    tipoGasto: primer.subgasto_id?.tipogasto_id?.nombre || primer.tipogasto_id?.nombre || null,
+    descripcion,
+    cantidadOtros,
+  };
+};
+
 // ============================================================================
 // COMPONENTE PRINCIPAL: APROBACIONES
 // ============================================================================
@@ -75,10 +110,10 @@ const Aprobaciones = () => {
   const [procesandoAccion, setProcesandoAccion] = useState(false);
   const [notificacion, setNotificacion] = useState(null);
 
-  // Filtros y Búsqueda
+  // Filtros y Búsqueda: Por defecto siempre se muestra lo pendiente de revisión
   const [busqueda, setBusqueda] = useState('');
   const [buscandoRemoto, setBuscandoRemoto] = useState(false);
-  const [filtroRevision, setFiltroRevision] = useState('TODOS'); // 'TODOS' | 'PENDIENTES' | 'REVISADOS'
+  const [filtroRevision, setFiltroRevision] = useState('PENDIENTES'); // 'PENDIENTES' | 'REVISADOS'
 
   // Estados de conmutación de revisión gerencial
   const [conmutandoId, setConmutandoId] = useState(null);
@@ -272,11 +307,12 @@ const Aprobaciones = () => {
       });
     }
 
-    if (esGerente && filtroRevision !== 'TODOS') {
-      if (filtroRevision === 'PENDIENTES') {
-        base = base.filter((r) => !Boolean(r.revisado || r.revision));
-      } else if (filtroRevision === 'REVISADOS') {
+    if (esGerente) {
+      if (filtroRevision === 'REVISADOS') {
         base = base.filter((r) => Boolean(r.revisado || r.revision));
+      } else {
+        // Por defecto: PENDIENTES (Falta revisar)
+        base = base.filter((r) => !Boolean(r.revisado || r.revision));
       }
     }
 
@@ -629,7 +665,15 @@ const Aprobaciones = () => {
             </div>
 
             {/* 2. Revisados por el Gerente */}
-            <div className="bg-emerald-50/70 border border-emerald-100 rounded-xl p-2.5 flex flex-col justify-between">
+            <div
+              onClick={() => setFiltroRevision('REVISADOS')}
+              className={`border rounded-xl p-2.5 flex flex-col justify-between cursor-pointer transition-all ${
+                filtroRevision === 'REVISADOS'
+                  ? 'bg-emerald-100/70 border-emerald-400 ring-2 ring-emerald-400/30'
+                  : 'bg-emerald-50/70 border-emerald-100 hover:border-emerald-300'
+              }`}
+              title="Filtrar rendiciones ya revisadas"
+            >
               <div className="flex items-center justify-between">
                 <span className="text-[10px] font-black uppercase tracking-wider text-emerald-700">
                   Revisados por Gerente
@@ -646,7 +690,15 @@ const Aprobaciones = () => {
             </div>
 
             {/* 3. Falta Revisar */}
-            <div className="bg-amber-50/70 border border-amber-100 rounded-xl p-2.5 flex flex-col justify-between">
+            <div
+              onClick={() => setFiltroRevision('PENDIENTES')}
+              className={`border rounded-xl p-2.5 flex flex-col justify-between cursor-pointer transition-all ${
+                filtroRevision === 'PENDIENTES'
+                  ? 'bg-amber-100/70 border-amber-400 ring-2 ring-amber-400/30'
+                  : 'bg-amber-50/70 border-amber-100 hover:border-amber-300'
+              }`}
+              title="Filtrar rendiciones pendientes de revisión"
+            >
               <div className="flex items-center justify-between">
                 <span className="text-[10px] font-black uppercase tracking-wider text-amber-800">
                   Falta Revisar
@@ -766,41 +818,32 @@ const Aprobaciones = () => {
           )}
         </div>
 
-        {/* Pestañas de Filtro de Revisión (Exclusivo Gerente de Operaciones) */}
+        {/* Pestañas de Filtro de Revisión (Exclusivo Gerente de Operaciones: Falta revisar / Revisados) */}
         {esGerente && (
           <div className="flex items-center gap-1 shrink-0 bg-brand-light/60 p-1 rounded-xl w-full sm:w-auto justify-center">
             <button
               type="button"
-              onClick={() => setFiltroRevision('TODOS')}
-              className={`px-2.5 py-1 rounded-lg text-[10px] font-black transition-all ${
-                filtroRevision === 'TODOS'
-                  ? 'bg-white text-brand-dark shadow-xs'
-                  : 'text-gray-500 hover:text-brand-dark'
-              }`}
-            >
-              Todos ({metricasRevision.totalCount})
-            </button>
-            <button
-              type="button"
               onClick={() => setFiltroRevision('PENDIENTES')}
-              className={`px-2.5 py-1 rounded-lg text-[10px] font-black transition-all ${
+              className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer ${
                 filtroRevision === 'PENDIENTES'
                   ? 'bg-amber-500 text-white shadow-xs'
-                  : 'text-amber-700 hover:bg-amber-50'
+                  : 'text-amber-800 hover:bg-amber-100/70'
               }`}
             >
-              Falta revisar ({metricasRevision.faltantesCount})
+              <Clock size={13} />
+              <span>Falta revisar ({metricasRevision.faltantesCount})</span>
             </button>
             <button
               type="button"
               onClick={() => setFiltroRevision('REVISADOS')}
-              className={`px-2.5 py-1 rounded-lg text-[10px] font-black transition-all ${
+              className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer ${
                 filtroRevision === 'REVISADOS'
                   ? 'bg-emerald-600 text-white shadow-xs'
-                  : 'text-emerald-700 hover:bg-emerald-50'
+                  : 'text-emerald-800 hover:bg-emerald-100/70'
               }`}
             >
-              Revisados ({metricasRevision.revisadosCount})
+              <CheckCircle2 size={13} />
+              <span>Revisados ({metricasRevision.revisadosCount})</span>
             </button>
           </div>
         )}
@@ -827,6 +870,7 @@ const Aprobaciones = () => {
                 const nombreSolicitante = obtenerNombreSolicitante(req.usuario_id);
                 const numComprobantes = (req.detalle || req.detalles || []).length;
                 const tipoCajaInfo = obtenerTipoCaja(req);
+                const primerSubgasto = obtenerPrimerSubgasto(req);
 
                 return (
                   <div
@@ -896,9 +940,36 @@ const Aprobaciones = () => {
                       </div>
                     </div>
 
-                    {/* Lado derecho: Monto Total y Botones de acción */}
-                    <div className="flex items-center gap-3 shrink-0">
-                      <div className="text-right">
+                    {/* Lado derecho: Subgasto a la izquierda del costo, Monto Total y Botones de acción */}
+                    <div className="flex items-center gap-3.5 shrink-0">
+                      {/* Detalle del subgasto (a la izquierda del costo en PC) */}
+                      {primerSubgasto ? (
+                        <div className="hidden md:flex flex-col items-end text-right max-w-[200px] lg:max-w-[280px] xl:max-w-[340px] pr-3.5 border-r border-gray-100">
+                          <div className="flex items-center gap-1.5 justify-end w-full">
+                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-lg bg-blue-50 text-blue-800 border border-blue-200/80 text-[10px] font-black uppercase tracking-wide truncate shadow-2xs">
+                              <Tag size={10} className="text-blue-600 shrink-0" />
+                              <span className="truncate">{primerSubgasto.nombreSubgasto}</span>
+                            </span>
+                            {primerSubgasto.cantidadOtros > 0 && (
+                              <span className="text-[9px] font-black text-gray-500 bg-gray-100 border border-gray-200/70 px-1.5 py-0.5 rounded-md shrink-0">
+                                +{primerSubgasto.cantidadOtros} {primerSubgasto.cantidadOtros === 1 ? 'doc' : 'docs'}
+                              </span>
+                            )}
+                          </div>
+                          {primerSubgasto.descripcion && (
+                            <span className="text-[10px] text-gray-500 italic truncate w-full mt-0.5" title={primerSubgasto.descripcion}>
+                              "{primerSubgasto.descripcion}"
+                            </span>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="hidden md:flex items-center pr-3.5 border-r border-gray-100 text-[10px] font-bold text-gray-400 italic">
+                          Sin comprobante
+                        </div>
+                      )}
+
+                      {/* Monto Total */}
+                      <div className="text-right shrink-0">
                         <span className="text-[9px] font-bold text-gray-400 uppercase tracking-wider block">
                           Gasto Total
                         </span>
@@ -966,6 +1037,7 @@ const Aprobaciones = () => {
                 const numComprobantes = (req.detalle || req.detalles || []).length;
                 const tieneFotosCompletas = (req.detalle || req.detalles || []).every((d) => d.adj_cajachica);
                 const tipoCajaInfo = obtenerTipoCaja(req);
+                const primerSubgasto = obtenerPrimerSubgasto(req);
 
                 return (
                   <div
@@ -1023,6 +1095,21 @@ const Aprobaciones = () => {
                           <p className="text-[11px] text-gray-600 font-medium mt-0.5 line-clamp-1 italic">
                             "{req.obs}"
                           </p>
+                        )}
+
+                        {/* Subgasto preliminar en móvil */}
+                        {primerSubgasto && (
+                          <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-blue-50 text-blue-800 border border-blue-200/70 text-[10px] font-black uppercase tracking-wide truncate max-w-[240px]">
+                              <Tag size={10} className="text-blue-600 shrink-0" />
+                              <span className="truncate">{primerSubgasto.nombreSubgasto}</span>
+                            </span>
+                            {primerSubgasto.cantidadOtros > 0 && (
+                              <span className="text-[9px] font-black text-gray-500 bg-gray-100 border border-gray-200/60 px-1.5 py-0.5 rounded-md shrink-0">
+                                +{primerSubgasto.cantidadOtros} más
+                              </span>
+                            )}
+                          </div>
                         )}
                       </div>
                     </div>
@@ -1311,6 +1398,37 @@ const Aprobaciones = () => {
             {/* Footer de Acciones del Modal */}
             <div className="px-4 py-3 bg-gray-50 border-t border-gray-100 flex items-center justify-between gap-2 shrink-0">
               <div className="flex items-center gap-2">
+                {esGerente && (
+                  <button
+                    type="button"
+                    onClick={(e) => handleToggleRevision(solicitudAuditoria, e)}
+                    disabled={conmutandoId === solicitudAuditoria.id || conmutandoMasivo}
+                    className={`px-3 py-1.5 rounded-xl border text-xs font-black flex items-center gap-1.5 transition-all shadow-xs cursor-pointer active:scale-95 ${
+                      Boolean(solicitudAuditoria.revisado || solicitudAuditoria.revision)
+                        ? 'bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-700'
+                        : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border-emerald-300'
+                    }`}
+                    title={
+                      Boolean(solicitudAuditoria.revisado || solicitudAuditoria.revision)
+                        ? 'Solicitud revisada/aprobada. Clic para desmarcar.'
+                        : 'Marcar solicitud como revisada/aprobada.'
+                    }
+                  >
+                    {conmutandoId === solicitudAuditoria.id ? (
+                      <RefreshCw size={13} className="animate-spin text-current" />
+                    ) : Boolean(solicitudAuditoria.revisado || solicitudAuditoria.revision) ? (
+                      <CheckCircle2 size={14} className="text-white" />
+                    ) : (
+                      <Clock size={14} className="text-emerald-700" />
+                    )}
+                    <span>
+                      {Boolean(solicitudAuditoria.revisado || solicitudAuditoria.revision)
+                        ? 'Revisado / Aprobado'
+                        : 'Aprobar / Marcar Revisado'}
+                    </span>
+                  </button>
+                )}
+
                 <button
                   type="button"
                   onClick={() => {
