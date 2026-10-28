@@ -22,7 +22,7 @@ export const extraerPuesto = (u) => {
 
 export const extraerArea = (u) => {
   if (!u) return '';
-  return u.area_id?.nombre || (typeof u.area_id === 'string' ? u.area_id : '');
+  return u.area_id?.nombre || (typeof u.area_id === 'string' ? u.area_id : '') || (typeof u.area === 'string' ? u.area : '') || u.area?.nombre || u.area_nombre || '';
 };
 
 /**
@@ -97,7 +97,7 @@ const Step1Cabecera = ({ datos, onChange }) => {
           const res = await fetchAuth(`${API_URL}/users/${user.id}/?format=json`);
           const data = await res.json();
           usuarioUrl = data.url || null;
-          areaUrl = data.area_id?.url || null;
+          areaUrl = data.area_id?.url || data.area?.url || (data.area_id ? `${API_URL}/Area/${data.area_id}/` : null);
           updateUser({ url: usuarioUrl, area_url: areaUrl });
         } catch {
           console.warn('No se pudo recuperar la URL de perfil del usuario.');
@@ -107,9 +107,9 @@ const Step1Cabecera = ({ datos, onChange }) => {
       onChange({
         usuario_id: user.id,
         usuario_url: usuarioUrl,
-        area_id: user.area_id,
+        area_id: user.area_id || user.area || null,
         area_url: areaUrl,
-        area_nombre: user.area_id,
+        area_nombre: user.area_nombre || user.area || user.area_id || '',
         usuario_nombre: user.nombre,
         usuario_puesto: user.puesto,
         fecha_solicitud: ahora,
@@ -171,11 +171,11 @@ const Step1Cabecera = ({ datos, onChange }) => {
     }
 
     if (esMandoArea) {
-      const miAreaNombre = (user?.area_id || '').toLowerCase().trim();
+      const miAreaNombre = (user?.area_id || user?.area || user?.area_nombre || '').toLowerCase().trim();
 
       return todosUsuarios.filter((u) => {
         // En users serializer el área siempre es u.area_id.nombre
-        const uAreaNombre = (u.area_id?.nombre || '').toLowerCase().trim();
+        const uAreaNombre = (u.area_id?.nombre || (typeof u.area_id === 'string' ? u.area_id : '') || u.area || u.area_nombre || '').toLowerCase().trim();
 
         if (miAreaNombre && uAreaNombre && miAreaNombre === uAreaNombre) {
           return true;
@@ -202,7 +202,7 @@ const Step1Cabecera = ({ datos, onChange }) => {
           `Usuario #${u.id}`;
 
         // El área siempre es area_id.nombre y el puesto puesto_id.nombre para users serializer
-        const nombreArea = u.area_id?.nombre || '';
+        const nombreArea = u.area_id?.nombre || (typeof u.area_id === 'string' ? u.area_id : '') || (typeof u.area === 'string' ? u.area : '') || u.area?.nombre || u.area_nombre || '';
         const nombrePuesto = u.puesto_id?.nombre || '';
         const subtituloAreaPuesto = [nombreArea, nombrePuesto].filter(Boolean).join(' - ');
 
@@ -213,8 +213,8 @@ const Step1Cabecera = ({ datos, onChange }) => {
           sublabel: esGerenteOSuperuser ? (subtituloAreaPuesto || null) : null,
           busquedaExtra: subtituloAreaPuesto,
           url: u.url || `${API_URL}/users/${u.id}/`,
-          area_id: u.area_id?.id || u.area_id,
-          area_url: u.area_id?.url || null,
+          area_id: u.area_id?.id || u.area_id || u.area?.id || u.area || null,
+          area_url: u.area_id?.url || u.area?.url || null,
           area_nombre: nombreArea,
           puesto_nombre: nombrePuesto,
         };
@@ -233,9 +233,9 @@ const Step1Cabecera = ({ datos, onChange }) => {
         usuario_nombre: seleccionado.label,
         usuario_puesto: seleccionado.puesto_nombre,
         ...(seleccionado.area_nombre ? {
-          area_id: seleccionado.area_id || user.area_id,
+          area_id: seleccionado.area_id || user.area_id || user.area || null,
           area_url: seleccionado.area_url || user.area_url,
-          area_nombre: seleccionado.area_nombre || user.area_id,
+          area_nombre: seleccionado.area_nombre || user.area_nombre || user.area || user.area_id || '',
         } : {})
       });
     }
@@ -249,7 +249,7 @@ const Step1Cabecera = ({ datos, onChange }) => {
       </div>
 
       {/* Alerta si falta el área del usuario */}
-      {(!user?.area_id || user.area_id === 'Sin Área') && (
+      {(!user?.area_id || user.area_id === 'Sin Área') && (!user?.area || user.area === 'Sin Área') && (!user?.area_nombre || user.area_nombre === 'Sin Área') && (
         <div className="flex items-center gap-3 bg-red-50 border border-red-200 text-red-600 text-sm font-bold rounded-2xl px-4 py-3 animate-shake">
           <Info size={18} />
           <span>Error: Tu usuario no tiene un área asignada. No podrás continuar con la solicitud.</span>
@@ -262,7 +262,7 @@ const Step1Cabecera = ({ datos, onChange }) => {
           <label className="block text-xs font-black text-brand-dark uppercase tracking-widest mb-2">Área</label>
           <div className="bg-brand-light border border-gray-100 rounded-2xl px-4 py-3 text-sm font-semibold text-gray-500 flex items-center gap-2">
             <Info size={15} className="text-brand-primary shrink-0" />
-            {datos.area_nombre || datos.area_id || user?.area_id || '—'}
+            {datos.area_nombre || datos.area_id || user?.area_nombre || user?.area || user?.area_id || '—'}
           </div>
         </div>
 

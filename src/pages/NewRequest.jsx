@@ -8,6 +8,7 @@ import Step1Cabecera from '../components/NewRequest/Step1Cabecera';
 import Step2Detalles from '../components/NewRequest/Step2Detalles';
 import Step3Resumen from '../components/NewRequest/Step3Resumen';
 import Toast from '../components/Toast';
+import { extraerIdEmpresa } from '../utils/tipoCaja';
 
 const API_URL = import.meta.env.DEV ? '' : (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
 
@@ -61,9 +62,9 @@ const mapearCabeceraExistente = (req) => {
   const usuarioUrl = usuarioObj?.url || (usuarioId ? `${API_URL}/Usuario/${usuarioId}/` : null);
   const usuarioNombre = usuarioObj?.full_name || usuarioObj?.username || req.created_by || '';
 
-  const areaId = typeof req.area_id === 'object' ? req.area_id.id : req.area_id;
+  const areaId = typeof req.area_id === 'object' ? req.area_id.id : (req.area_id || req.area || null);
   const areaUrl = typeof req.area_id === 'object' ? req.area_id.url : null;
-  const areaNombre = typeof req.area_id === 'object' ? req.area_id.nombre : String(req.area_id || '');
+  const areaNombre = typeof req.area_id === 'object' ? req.area_id.nombre : String(req.area_id || req.area || '');
 
   return {
     id: req.id || extraerId(req.url),
@@ -105,16 +106,7 @@ const extraerSubgastoUrl = (sub) => {
   return null;
 };
 
-const extraerEmpresaId = (emp) => {
-  if (!emp) return null;
-  if (typeof emp === 'number') return emp;
-  if (typeof emp === 'object') return emp.id || extraerId(emp.url) || null;
-  if (typeof emp === 'string') {
-    const id = extraerId(emp);
-    return id ? parseInt(id, 10) : null;
-  }
-  return null;
-};
+const extraerEmpresaId = (emp) => extraerIdEmpresa(emp);
 
 const extraerEmpresaUrl = (emp) => {
   if (!emp) return null;
@@ -363,7 +355,7 @@ const NewRequest = () => {
 
   // Validaciones por paso para habilitar el avance
   const pasoValido = pasoActual === 1
-    ? !!cabecera.usuario_id && !!cabecera.area_id && !!cabecera.fecha_solicitud
+    ? !!cabecera.usuario_id && !!(cabecera.area_id || cabecera.area || cabecera.area_nombre || user?.area_id || user?.area || user?.area_nombre) && !!cabecera.fecha_solicitud
     : true;
 
   const irAnterior = () => setPasoActual((p) => Math.max(1, p - 1));
@@ -534,7 +526,15 @@ const NewRequest = () => {
         // MODO CREACIÓN: POST NUEVO REQUERIMIENTO EN 'PD' Y COMPROBANTES
         // --------------------------------------------------------------------
         const usuarioHyperlink = cabecera.usuario_url || user?.url || (cabecera.usuario_id ? `${API_URL}/users/${cabecera.usuario_id}/` : null);
-        const areaHyperlink = cabecera.area_url || user?.area_url || null;
+        const areaValor = cabecera.area_id || user?.area_id || cabecera.area || user?.area || null;
+        let areaHyperlink = cabecera.area_url || user?.area_url || null;
+        if (!areaHyperlink && areaValor) {
+          if (typeof areaValor === 'string' && areaValor.startsWith('http')) {
+            areaHyperlink = areaValor;
+          } else if (typeof areaValor === 'number' || (typeof areaValor === 'string' && /^\d+$/.test(areaValor))) {
+            areaHyperlink = `${API_URL}/Area/${areaValor}/`;
+          }
+        }
 
         // Se crea siempre inicialmente en 'PD' para poder asociar los comprobantes
         const cabeceraPayload = {

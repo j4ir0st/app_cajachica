@@ -75,6 +75,23 @@ const obtenerFechaLunesActual = () => {
   return lunes.toISOString().slice(0, 10);
 };
 
+/**
+ * Helper para verificar si un requerimiento es candidato válido para Cierre de Caja:
+ * - Debe estar Liquidado ('LQ')
+ * - Debe estar Revisado por Gerencia ('revisado' o 'revision' === true)
+ * - NO debe pertenecer ya a otro cierre semanal (sin 'saldo_semanal_id' ni 'saldo_semanal' ni 'codigo_cierre')
+ */
+const esRequerimientoValidoParaCierre = (req) => {
+  if (!req) return false;
+  const estado = typeof req.estado_requerimiento === 'object'
+    ? Object.keys(req.estado_requerimiento)[0]
+    : req.estado_requerimiento;
+  const estaLiquidado = estado === 'LQ';
+  const estaRevisado = Boolean(req.revisado || req.revision);
+  const yaTieneSaldo = Boolean(req.saldo_semanal_id || req.saldo_semanal || req.codigo_cierre);
+  return estaLiquidado && estaRevisado && !yaTieneSaldo;
+};
+
 // ============================================================================
 // COMPONENTE PRINCIPAL: CIERRE DE CAJA
 // ============================================================================
@@ -115,16 +132,17 @@ const CierreCaja = () => {
   const [mostrarModalConfirmacion, setMostrarModalConfirmacion] = useState(false);
 
   // ============================================================================
-  // CARGA DE SOLICITUDES LIQUIDADAS
+  // CARGA DE SOLICITUDES LIQUIDADAS Y REVISADAS
   // ============================================================================
 
   const cargarSolicitudesLiquidadas = async () => {
     setCargando(true);
     try {
-      // Filtrar únicamente los registros en estado Liquidado (LQ)
+      // Filtrar únicamente los registros en estado Liquidado (LQ) y con revisión gerencial (revisado=true)
       const parametros = new URLSearchParams({
         format: 'json',
         estado_requerimiento: 'LQ',
+        revisado: 'true',
       });
 
       const res = await fetchAuth(`${API_URL}/Requerimiento_CajaChica/?${parametros.toString()}`);
@@ -134,14 +152,14 @@ const CierreCaja = () => {
       }
 
       const data = await res.json();
-      const lista = data.results ?? data;
+      const lista = data.results ?? (Array.isArray(data) ? data : []);
 
-      const ordenadas = Array.isArray(lista)
-        ? [...lista].sort((a, b) => Number(b.id || 0) - Number(a.id || 0))
-        : [];
+      const ordenadas = lista
+        .filter(esRequerimientoValidoParaCierre)
+        .sort((a, b) => Number(b.id || 0) - Number(a.id || 0));
 
       setSolicitudesLiquidadas(ordenadas);
-      console.log(`[CierreCaja] ✅ Cargadas ${ordenadas.length} solicitudes liquidadas para cierre.`);
+      console.log(`[CierreCaja] ✅ Cargadas ${ordenadas.length} solicitudes liquidadas y revisadas para cierre.`);
     } catch (err) {
       console.error('[CierreCaja] ❌ Error al cargar liquidaciones:', err.message || err);
       setNotificacion({
@@ -159,15 +177,17 @@ const CierreCaja = () => {
   }, []);
 
   // ============================================================================
-  // FILTRADO REACTIVO EN MEMORIA
+  // FILTRADO REACTIVO EN MEMORIA (SOLO LIQUIDADOS Y REVISADOS)
   // ============================================================================
 
   const solicitudesFiltradas = useMemo(() => {
-    if (!busqueda.trim()) return solicitudesLiquidadas;
+    const base = solicitudesLiquidadas.filter(esRequerimientoValidoParaCierre);
+
+    if (!busqueda.trim()) return base;
 
     const query = busqueda.toLowerCase().trim();
     const querySinHash = query.replace(/^#/, '');
-    return solicitudesLiquidadas.filter((req) => {
+    return base.filter((req) => {
       const idTexto = String(req.id || '').toLowerCase();
       const solicitanteTexto = obtenerNombreSolicitante(req.usuario_id).toLowerCase();
       const obsTexto = (req.obs || '').toLowerCase();
@@ -196,7 +216,6 @@ const CierreCaja = () => {
     const esIdNumerico = /^\d+$/.test(idLimpio);
     const idEncontradoEnMemoria = esIdNumerico && solicitudesLiquidadas.some((s) => String(s.id) === idLimpio);
 
-    // Si ya existe en memoria el ID o la búsqueda de texto ya tiene resultados locales, evitar consultar a la BD
     if (idEncontradoEnMemoria) return;
     if (!esIdNumerico && solicitudesFiltradas.length > 0) return;
 
@@ -207,25 +226,29 @@ const CierreCaja = () => {
           const res = await fetchAuth(`${API_URL}/Requerimiento_CajaChica/${idLimpio}/?format=json`);
           if (res.ok) {
             const req = await res.json();
-            setSolicitudesLiquidadas((prev) => {
-              const existe = prev.some((s) => s.id === req.id);
-              return existe ? prev : [req, ...prev];
-            });
+            if (esRequerimientoValidoParaCierre(req)) {
+              setSolicitudesLiquidadas((prev) => {
+                const existe = prev.some((s) => s.id === req.id);
+                return existe ? prev : [req, ...prev];
+              });
+            }
           }
         } else {
           const params = new URLSearchParams({
             format: 'json',
             estado_requerimiento: 'LQ',
+            revisado: 'true',
             search: termino,
           });
           const res = await fetchAuth(`${API_URL}/Requerimiento_CajaChica/?${params.toString()}`);
           if (res.ok) {
             const data = await res.json();
             const lista = data.results ?? (Array.isArray(data) ? data : []);
-            if (lista.length > 0) {
+            const validos = lista.filter(esRequerimientoValidoParaCierre);
+            if (validos.length > 0) {
               setSolicitudesLiquidadas((prev) => {
                 const idsExistentes = new Set(prev.map((s) => s.id));
-                const nuevos = lista.filter((s) => !idsExistentes.has(s.id));
+                const nuevos = validos.filter((s) => !idsExistentes.has(s.id));
                 return nuevos.length > 0 ? [...prev, ...nuevos] : prev;
               });
             }
@@ -242,14 +265,16 @@ const CierreCaja = () => {
   }, [busqueda, solicitudesLiquidadas.length, solicitudesFiltradas.length]);
 
   // ============================================================================
-  // CÁLCULOS FINANCIEROS DEL CIERRE
+  // CÁLCULOS FINANCIEROS DEL CIERRE (SOLO LIQUIDADOS Y REVISADOS)
   // ============================================================================
 
   const gastoTotalSemana = useMemo(() => {
-    return solicitudesLiquidadas.reduce((acumulado, req) => {
-      const total = parseFloat(req.total_gastado || req.monto_solicitado || 0);
-      return acumulado + (isNaN(total) ? 0 : total);
-    }, 0);
+    return solicitudesLiquidadas
+      .filter(esRequerimientoValidoParaCierre)
+      .reduce((acumulado, req) => {
+        const total = parseFloat(req.total_gastado || req.monto_solicitado || 0);
+        return acumulado + (isNaN(total) ? 0 : total);
+      }, 0);
   }, [solicitudesLiquidadas]);
 
   const saldoInicialNum = parseFloat(saldoInicial) || 0;
@@ -298,15 +323,35 @@ const CierreCaja = () => {
   };
 
   // ============================================================================
-  // EJECUTAR CIERRE DE CAJA SEMANAL
+  // EJECUTAR CIERRE DE CAJA SEMANAL (SOLO LIQUIDADOS Y REVISADOS)
   // ============================================================================
 
   const ejecutarCierreSemanal = async () => {
-    if (solicitudesLiquidadas.length === 0) {
+    if (!fechaInicio || !fechaFin) {
+      setNotificacion({
+        tipo: 'advertencia',
+        titulo: 'Fechas Requeridas',
+        mensaje: 'Debe ingresar tanto la fecha de inicio como la fecha de fin para el periodo de cierre.',
+      });
+      return;
+    }
+
+    if (fechaInicio > fechaFin) {
+      setNotificacion({
+        tipo: 'advertencia',
+        titulo: 'Rango de Fechas Inválido',
+        mensaje: 'La fecha de inicio no puede ser posterior a la fecha de fin.',
+      });
+      return;
+    }
+
+    const solicitudesValidas = solicitudesLiquidadas.filter(esRequerimientoValidoParaCierre);
+
+    if (solicitudesValidas.length === 0) {
       setNotificacion({
         tipo: 'advertencia',
         titulo: 'Sin Registros por Cerrar',
-        mensaje: 'No hay solicitudes liquidadas disponibles para cerrar.',
+        mensaje: 'No hay solicitudes liquidadas y revisadas disponibles para cerrar.',
       });
       return;
     }
@@ -315,50 +360,69 @@ const CierreCaja = () => {
     setMostrarModalConfirmacion(false);
 
     try {
-      const idsRequerimientos = solicitudesLiquidadas.map((req) => req.id);
+      const idsRequerimientos = solicitudesValidas
+        .map((req) => {
+          if (typeof req.id === 'number') return req.id;
+          if (typeof req.id === 'string' && /^\d+$/.test(req.id)) return parseInt(req.id, 10);
+          if (typeof req.url === 'string') {
+            const match = req.url.match(/\/(\d+)\/?$/);
+            if (match) return parseInt(match[1], 10);
+          }
+          return null;
+        })
+        .filter((id) => Number.isInteger(id) && id > 0);
+
+      if (idsRequerimientos.length === 0) {
+        setNotificacion({
+          tipo: 'advertencia',
+          titulo: 'IDs Inválidos',
+          mensaje: 'No se encontraron identificadores válidos para las solicitudes a cerrar.',
+        });
+        setProcesandoCierre(false);
+        return;
+      }
 
       const payloadCierre = {
         fecha_inicio: fechaInicio,
         fecha_fin: fechaFin,
-        saldo_inicial: saldoInicialNum,
-        total_gasto: gastoTotalSemana,
-        saldo_final: saldoFinal,
-        nuevo_ingreso: nuevoIngresoSugerido,
+        saldo_inicial: saldoInicialNum.toFixed(2),
+        total_gasto: gastoTotalSemana.toFixed(2),
+        saldo_final: saldoFinal.toFixed(2),
+        nuevo_ingreso: nuevoIngresoSugerido.toFixed(2),
         observaciones: observaciones.trim() || `Cierre semanal del ${fechaInicio} al ${fechaFin}`,
-        requerimientos: idsRequerimientos.join(','),
+        requerimientos: idsRequerimientos,
       };
 
       // 1. Ejecutar Cierre Atómico en /RC_SaldoSemanal/ según GUIA_FRONTEND.md
-      const res = await fetchAuth(`${API_URL}/RC_SaldoSemanal/?format=json`, {
+      let res = await fetchAuth(`${API_URL}/RC_SaldoSemanal/?format=json`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payloadCierre),
       });
 
       if (!res.ok) {
-        // En caso de que se use la acción secundaria /cerrar-caja/
-        if (res.status === 404 || res.status === 405) {
+        // Reintento alternativo con requerimientos en formato string separado por comas
+        const payloadString = { ...payloadCierre, requerimientos: idsRequerimientos.join(',') };
+        const resAlt = await fetchAuth(`${API_URL}/RC_SaldoSemanal/?format=json`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payloadString),
+        });
+        if (resAlt.ok) {
+          res = resAlt;
+        } else if (res.status === 404 || res.status === 405 || resAlt.status === 404 || resAlt.status === 405) {
           const resFallback = await fetchAuth(`${API_URL}/RC_SaldoSemanal/cerrar-caja/?format=json`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payloadCierre),
           });
-          if (!resFallback.ok) {
-            const errDet = await extraerMensajeError(resFallback);
-            throw new Error(errDet);
+          if (resFallback.ok) {
+            res = resFallback;
           }
-          const dataFallback = await resFallback.json();
-          const codigoGenerado = dataFallback.codigo_cierre || `Cierre #${dataFallback.id}`;
-          setNotificacion({
-            tipo: 'exito',
-            titulo: 'Cierre de Caja Exitoso',
-            mensaje: `Se generó el registro ${codigoGenerado} y se cerraron formalmente ${solicitudesLiquidadas.length} solicitudes liquidadas.`,
-          });
-          setObservaciones('');
-          await cargarSolicitudesLiquidadas();
-          return;
         }
+      }
 
+      if (!res.ok) {
         const errorDetallado = await extraerMensajeError(res);
         throw new Error(errorDetallado);
       }
@@ -369,7 +433,7 @@ const CierreCaja = () => {
       setNotificacion({
         tipo: 'exito',
         titulo: 'Cierre de Caja Exitoso',
-        mensaje: `Se generó el registro de saldo semanal ${codigoGenerado} y se cerraron formalmente ${solicitudesLiquidadas.length} solicitudes liquidadas.`,
+        mensaje: `Se generó el registro de saldo semanal ${codigoGenerado} y se cerraron formalmente ${idsRequerimientos.length} solicitudes liquidadas y revisadas.`,
       });
 
       setObservaciones('');
@@ -407,7 +471,7 @@ const CierreCaja = () => {
         <div>
           <h1 className="text-xl font-black text-brand-dark tracking-tight p-0 m-0">Cierre Semanal de Caja</h1>
           <p className="text-xs text-gray-400 mt-0.5 p-0 m-0">
-            Consolidación de rendiciones liquidadas, balance de caja y nuevo importe de reposición.
+            Consolidación de rendiciones liquidadas y revisadas, balance de caja y nuevo importe de reposición.
           </p>
         </div>
 
@@ -415,7 +479,7 @@ const CierreCaja = () => {
           onClick={cargarSolicitudesLiquidadas}
           disabled={cargando || procesandoCierre}
           className="p-2 rounded-2xl border border-gray-200 hover:border-brand-primary text-gray-500 hover:text-brand-primary bg-white transition-all disabled:opacity-50 shadow-sm"
-          title="Recargar liquidaciones"
+          title="Recargar liquidaciones y revisiones"
         >
           <RefreshCw size={15} className={cargando ? 'animate-spin text-brand-primary' : ''} />
         </button>
@@ -510,7 +574,7 @@ const CierreCaja = () => {
             </div>
 
             <div className="bg-brand-light/70 rounded-xl px-3 py-1.5">
-              <span className="text-[9px] font-bold text-brand-primary uppercase tracking-wider block">Solicitudes a Cerrar</span>
+              <span className="text-[9px] font-bold text-brand-primary uppercase tracking-wider block">Liquidadas y Revisadas</span>
               <span className="text-xs sm:text-sm font-black text-brand-dark">
                 {solicitudesLiquidadas.length} reg.
               </span>
@@ -529,7 +593,7 @@ const CierreCaja = () => {
         </div>
       </div>
 
-      {/* Buscador de Solicitudes Liquidadas */}
+      {/* Buscador de Solicitudes Liquidadas y Revisadas */}
       <div className="bg-white px-3 py-2 rounded-2xl border border-gray-100 shadow-sm shrink-0">
         <div className="relative">
           <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400" />
@@ -557,13 +621,13 @@ const CierreCaja = () => {
         </div>
       </div>
 
-      {/* Contenedor Scrollable de Solicitudes Liquidadas */}
+      {/* Contenedor Scrollable de Solicitudes Liquidadas y Revisadas */}
       <div className="flex-1 overflow-y-auto min-h-0 pr-0.5 pb-2">
         {cargando ? (
           <div className="flex flex-col items-center justify-center py-16 space-y-3">
             <div className="w-9 h-9 border-4 border-brand-primary border-t-transparent rounded-full animate-spin" />
             <span className="text-xs font-bold text-gray-400 uppercase tracking-widest">
-              Cargando rendiciones liquidadas...
+              Cargando rendiciones liquidadas y revisadas...
             </span>
           </div>
         ) : solicitudesFiltradas.length > 0 ? (
@@ -590,6 +654,11 @@ const CierreCaja = () => {
                       className={`text-[9px] sm:text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded-lg border shrink-0 ${tipoCajaInfo.claseBadge}`}
                     >
                       {tipoCajaInfo.etiqueta}
+                    </span>
+
+                    <span className="text-[9px] sm:text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200/80 px-2 py-0.5 rounded-lg flex items-center gap-1 shrink-0">
+                      <CheckCircle2 size={11} className="text-emerald-600" />
+                      Revisado
                     </span>
 
                     <div className="min-w-0">
@@ -661,8 +730,8 @@ const CierreCaja = () => {
             <h3 className="text-sm font-black text-brand-dark">No hay rendiciones pendientes de cierre</h3>
             <p className="text-xs text-gray-400 max-w-sm">
               {busqueda
-                ? 'No se encontraron liquidaciones con los criterios de búsqueda especificados.'
-                : 'Todas las solicitudes liquidadas ya han sido cerradas en la semana.'}
+                ? 'No se encontraron rendiciones con los criterios de búsqueda especificados.'
+                : 'No hay solicitudes liquidadas y revisadas pendientes de cierre semanal.'}
             </p>
           </div>
         )}
@@ -687,7 +756,7 @@ const CierreCaja = () => {
             <div className="text-center space-y-1">
               <h3 className="text-base font-black text-brand-dark">Confirmar Cierre de Caja Semanal</h3>
               <p className="text-xs text-gray-400">
-                Se actualizarán todas las solicitudes liquidadas al estado <b>Cerrado (CD)</b>.
+                Se actualizarán las <b>{solicitudesLiquidadas.length}</b> solicitudes liquidadas y revisadas al estado <b>Cerrado (CD)</b>.
               </p>
             </div>
 
@@ -778,6 +847,10 @@ const CierreCaja = () => {
                       </span>
                     );
                   })()}
+                  <span className="text-[9px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200/80 px-2 py-0.5 rounded-lg flex items-center gap-1">
+                    <CheckCircle2 size={11} className="text-emerald-600" />
+                    Revisado
+                  </span>
                 </div>
                 <h3 className="text-sm font-black text-brand-dark">Comprobantes de la Rendición</h3>
               </div>

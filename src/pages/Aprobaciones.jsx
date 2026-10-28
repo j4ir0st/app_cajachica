@@ -33,7 +33,7 @@ import {
 import { useUserStore } from '../store/userStore';
 import { useCatalogoStore } from '../store/catalogoStore';
 import { fetchAuth, extraerMensajeError } from '../utils/fetchAuth';
-import { obtenerTipoCaja } from '../utils/tipoCaja';
+import { obtenerTipoCaja, extraerIdEmpresa } from '../utils/tipoCaja';
 import { esArchivoPdf } from '../utils/archivoUtil';
 import { resolverRutaOEntidad } from '../utils/entidades';
 import { esGerenteOperaciones, puedeAccederCierreCaja } from '../utils/permisos';
@@ -541,7 +541,8 @@ const Aprobaciones = () => {
             if (det.provincia_id?.url) formDataDetalle.append('provincia_id', det.provincia_id.url);
             if (det.nro_factura) formDataDetalle.append('nro_factura', det.nro_factura);
             if (det.nro_ruc) formDataDetalle.append('nro_ruc', det.nro_ruc);
-            const empVal = det.empresa_id?.url || (typeof det.empresa_id === 'string' && det.empresa_id.startsWith('http') ? det.empresa_id : (det.empresa_id ? `${API_URL}/Empresa/${det.empresa_id}/` : null));
+            const idEmp = extraerIdEmpresa(det.empresa_id || det.empresa);
+            const empVal = idEmp ? `${API_URL}/Empresa/${idEmp}/` : null;
             if (empVal) formDataDetalle.append('empresa_id', empVal);
             const placaVal = det.placa_id?.url || (typeof det.placa_id === 'string' && det.placa_id.startsWith('http') ? det.placa_id : (det.placa_id ? `${API_URL}/RC_Placas/${det.placa_id}/` : null));
             if (placaVal) {
@@ -1371,7 +1372,10 @@ const Aprobaciones = () => {
 
                       <div className="flex flex-wrap gap-1 text-[10px] text-gray-500 font-semibold pt-1 border-t border-gray-50">
                         {(() => {
-                          const tipoDet = obtenerTipoCaja(det);
+                          const tipoDet = obtenerTipoCaja(
+                            det?.empresa_id ? det : (solicitudAuditoria?.empresa_id ? { ...det, empresa_id: solicitudAuditoria.empresa_id } : det),
+                            true
+                          );
                           return (
                             <span className={`px-2 py-0.5 rounded-md font-black text-[9px] uppercase border ${tipoDet.claseBadge}`}>
                               {tipoDet.etiqueta} {tipoDet.nombreEmpresa !== 'Sin Factura' ? `• ${tipoDet.nombreEmpresa}` : ''}

@@ -37,16 +37,18 @@ Los requerimientos manejan un ciclo de vida de 4 estados (`models.TextChoices`).
 > 4. **Edición de Detalles**: Solo permitida mientras el requerimiento esté en estado **`PD`**.
 
 > [!TIP]
-> **Paso Previo al Cierre — Revisión por Gerencia en Aprobaciones (`revisado` / `revision`):**
-> En la pestaña **Aprobaciones** (`/aprobaciones`), el **Gerente de Operaciones** audita y da visto bueno previo a los requerimientos liquidados (`LQ`):
+> **Paso 1: Pre-Aprobación por Jefatura Directa (`aprobado`, `aprobado_por`, `fecha_aprobacion`):**
+> Cuando un colaborador liquida su solicitud (`LQ`), su **Jefe Inmediato** debe pre-aprobar la rendición antes de que llegue a la Gerencia:
+> - **`aprobado` (`boolean`):** `true` si el jefe aprueba los comprobantes y gastos rendidos; `false` por defecto o si es desaprobado.
+> - **`aprobado_por` (`string | null`):** Nombre completo del jefe aprobador (ej. `"Carlos Alberto Mendoza"`). Al ser un campo de auditoría, se serializa directamente como texto para evitar sobrecarga de objetos.
+> - **`fecha_aprobacion` (`string | null`):** Timestamp ISO 8601 del momento exacto de la pre-aprobación (`"2026-10-28T15:20:00Z"`).
+> - **Actualización:** Se realiza mediante `PATCH /Requerimiento_CajaChica/<ID>/` enviando `{ "aprobado": true, "aprobado_por": <USER_ID>, "fecha_aprobacion": "<ISO_DATE>" }`.
+>
+> **Paso 2: Revisión por Gerencia de Operaciones (`revisado` / `revision`):**
+> Una vez pre-aprobada por el jefe, el **Gerente de Operaciones** realiza la auditoría previa al Cierre Semanal (`CD`):
 > - **Campo Booleano:** `revisado: boolean` (se expone también como `revision` para compatibilidad directa con el Frontend).
-> - **Vista en Lista en PC (Desktop):** En computadoras/PC, los requerimientos se visualizan como una lista corrida horizontal (similar a Cierre de Caja) con selector de revisión integrado, en lugar de tarjetas.
-> - **Panel KPI Gerencial:** Título y banner similar a Cierre de Caja donde se resume:
->   1. **Total por Aprobar:** Conteo de requerimientos y monto total general (`S/`).
->   2. **Revisados por Gerente:** Cuántos registros ya fueron revisados y cuánto suman (`S/`).
->   3. **Falta Revisar:** Cuántos registros quedan pendientes y monto pendiente (`S/`).
-> - **Exclusividad:** Este panel KPI de revisión y los conmutadores de `revisado` solo son visibles para el **Gerente de Operaciones** (y superusuario). Los demás aprobadores (coordinadores, jefaturas) ven la bandeja estándar sin estos contadores gerenciales.
-> - **Acciones Rápidas:** Conmutación individual vía `POST /Requerimiento_CajaChica/<ID>/revisar/` o revisión masiva vía `POST /Requerimiento_CajaChica/revisar-masivo/`.
+> - **Filtrado Rápido:** Permite aislar en la tabla de cierre los requerimientos pendientes de revisión (`?revisado=false`) o los ya revisados (`?revisado=true`).
+> - **Acciones Rápidas:** Soporta conmutación individual vía `POST /Requerimiento_CajaChica/<ID>/revisar/` o aprobación masiva por selección múltiple vía `POST /Requerimiento_CajaChica/revisar-masivo/`.
 
 ---
 
@@ -89,16 +91,80 @@ El modelo `RC_SubGasto` contiene banderas booleanas que le indican al Frontend *
 
 | Operación | Método | URL | Body / Query |
 | :--- | :--- | :--- | :--- |
-| **Listar con Filtros** | `GET` | `/Requerimiento_CajaChica/` | `?usuario_id=15&estado_requerimiento=LQ,PD&revisado=false&page=1` |
+| **Listar con Filtros** | `GET` | `/Requerimiento_CajaChica/` | `?usuario_id=15&estado_requerimiento=LQ,PD&aprobado=true&revisado=false&page=1` |
 | **Obtener** | `GET` | `/Requerimiento_CajaChica/<ID>/` | — |
 | **Crear** | `POST` | `/Requerimiento_CajaChica/` | `{"monto_solicitado": 250.00, "obs": "...", "area_id": 3, "usuario_id": 15}` |
 | **Editar / Sincronizar** | `PATCH` | `/Requerimiento_CajaChica/<ID>/` | `{"obs": "...", "detalles": [...]}` (Solo en estado `PD`) |
 | **Liquidar** | `POST` | `/Requerimiento_CajaChica/<ID>/liquidar/` | `{"obs": "Rendición finalizada"}` |
+| **Pre-aprobar (Jefe)** | `PATCH` | `/Requerimiento_CajaChica/<ID>/` | `{"aprobado": true, "aprobado_por": 42, "fecha_aprobacion": "2026-10-28T15:20:00Z"}` |
+| **Desaprobar (Jefe)** | `PATCH` | `/Requerimiento_CajaChica/<ID>/` | `{"aprobado": false, "aprobado_por": null, "fecha_aprobacion": null}` |
 | **Revisar (Gerencia)** | `POST` / `PATCH` | `/Requerimiento_CajaChica/<ID>/revisar/` | `{"revisado": true}` *(o `false` para desmarcar)* |
 | **Revisión Masiva** | `POST` | `/Requerimiento_CajaChica/revisar-masivo/` | `{"ids": [4755, 4756], "revisado": true}` |
 
+> [!NOTE]
+> **Estructura JSON Retornada por `GET /Requerimiento_CajaChica/<ID>/`:**
+> Al consultar un requerimiento, el backend serializa objetos completos para entidades principales (`usuario_id`, `empresa_id`) y strings directos para campos de auditoría (`created_by`, `aprobado_por`):
+>
+> ```json
+> {
+>   "id": 4755,
+>   "url": "https://appsurgicorperu.com/Requerimiento_CajaChica/4755/",
+>   "usuario_id": {
+>     "id": 184,
+>     "username": "dechenique",
+>     "first_name": "Dyland John",
+>     "last_name": "Echenique Bravo",
+>     "full_name": "Dyland John Echenique Bravo",
+>     "email": "dyland7ebjsud@gmail.com",
+>     "area": "Distribución",
+>     "puesto": "Auxiliar"
+>   },
+>   "area_id": "Distribución",
+>   "monto_solicitado": "250.00",
+>   "total_gastado": "248.50",
+>   "estado_requerimiento": {
+>     "LQ": "Liquidado"
+>   },
+>   "obs": "Gastos operativos de reparto Lima Metropolitana",
+>   "fecha_solicitud": "2026-10-25T08:30:00Z",
+>   "fecha_liquidacion": "2026-10-28T14:15:00Z",
+>   "created_by": "Dyland John Echenique Bravo",
+>   "aprobado": true,
+>   "aprobado_por": "Carlos Alberto Mendoza",
+>   "fecha_aprobacion": "2026-10-28T15:20:00Z",
+>   "revisado": false,
+>   "revision": false,
+>   "saldo_semanal_id": null,
+>   "codigo_cierre": null,
+>   "detalle": [
+>     {
+>       "id": 8102,
+>       "url": "https://appsurgicorperu.com/RC_Detalle/8102/",
+>       "subgasto_id": {
+>         "id": 12,
+>         "nombre": "Combustible",
+>         "tipogasto_id": { "id": 2, "nombre": "Movilidad", "is_aux": false },
+>         "grupo_acceso": "TODOS"
+>       },
+>       "empresa_id": {
+>         "url": "https://appsurgicorperu.com/Empresa/1/",
+>         "id": 1,
+>         "empresa": "SURGICORP S.R.L."
+>       },
+>       "costo": "120.00",
+>       "lima_provincia": "L",
+>       "nro_ruc": "20100128056",
+>       "nro_factura": "E001-45689",
+>       "placa": "ABC-123",
+>       "adj_cajachica": "https://appsurgicorperu.com/media/adj_cajachica/factura_8102.pdf"
+>     }
+>   ]
+> }
+> ```
+
 > [!TIP]
 > **Filtros Disponibles en `/Requerimiento_CajaChica/`:**
+> - `?aprobado=true` / `?aprobado=false`: **Filtro de pre-aprobación del jefe directo**. Permite al jefe listar las solicitudes que tiene pendientes de aprobación (`?aprobado=false&estado_requerimiento=LQ`).
 > - `?revisado=true` / `?revisado=false` (alias: `?revision=true`/`false`): **Filtro booleano de revisión gerencial**. Ideal para listar en el modal de cierre únicamente los liquidados pendientes de revisión o ya revisados.
 > - `?estado_requerimiento=LQ,PD`: **Filtro de tipo `IN`** (uno o varios estados separados por coma. Ej: `LQ,PD` para "Mis Solicitudes").
 > - `?id=<ID>` o `?id__in=10,11,12`: Filtro exacto o lista de IDs.
@@ -108,7 +174,7 @@ El modelo `RC_SubGasto` contiene banderas booleanas que le indican al Frontend *
 > - `?area=<texto>`: Búsqueda por nombre de área.
 > - `?fecha_solicitud_desde=YYYY-MM-DD` / `?fecha_solicitud_hasta=YYYY-MM-DD`: Rango de fechas.
 > - `?search=<texto>`: Búsqueda global en ID, observaciones, username, nombres de usuario y área.
-> - `?ordering=-id|fecha_solicitud|monto_solicitado|revisado`: Ordenamiento (admite `revisado` y `-revisado`).
+> - `?ordering=-id|fecha_solicitud|monto_solicitado|aprobado|revisado`: Ordenamiento.
 
 ### B. Detalles / Comprobantes de Gasto (`/RC_Detalle/`)
 
@@ -243,10 +309,17 @@ export interface RCPlacaItem {
   chofer?: string;
 }
 
+export interface EmpresaItem {
+  url: string;
+  id: number;
+  empresa: string;
+}
+
 export interface RCDetalleItem {
   id?: number;
   requerimiento_id: number | string;
   subgasto_id: number | SubGastoItem;
+  empresa_id?: EmpresaItem | number | string | null; // Objeto completo de la empresa {url, id, empresa}
   lima_provincia: 'L' | 'P';
   provincia_id?: number | string;
   costo: number | string;
@@ -280,6 +353,10 @@ export interface RequerimientoCajaChicaItem {
   monto_solicitado: number | string;
   total_gastado: number | string;
   estado_requerimiento: EstadoObjeto;
+  created_by?: string; // Nombre completo del usuario creador (ej: "Dyland John Echenique Bravo")
+  aprobado: boolean; // Pre-aprobación del jefe directo antes de revisión de gerencia
+  aprobado_por?: string | null; // Nombre completo del jefe aprobador (ej: "Carlos Alberto Mendoza")
+  fecha_aprobacion?: string | null; // Fecha y hora ISO de pre-aprobación
   revisado: boolean; // Flag booleano de revisión gerencial antes del cierre
   revision?: boolean; // Alias idéntico a revisado
   saldo_semanal_id?: number | null;
@@ -287,8 +364,7 @@ export interface RequerimientoCajaChicaItem {
   obs?: string;
   fecha_solicitud?: string;
   fecha_liquidacion?: string;
-  created_by?: string; // Nombre completo del usuario creador (ej: "Juan Perez")
-  detalle?: RCDetalleItem[]; // Lista de detalles/comprobantes con su subgasto_id limpio
+  detalle?: RCDetalleItem[]; // Lista de detalles/comprobantes con empresa_id y subgasto_id
 }
 
 export interface SaldoSemanalItem {
@@ -361,6 +437,23 @@ export const cajaChicaService = {
 
   liquidarRequerimiento: async (id: number, obs?: string) => {
     const response = await api.post(`/Requerimiento_CajaChica/${id}/liquidar/`, { obs });
+    return response.data;
+  },
+
+  // Pre-aprobación por Jefatura Directa (Paso previo a la revisión de gerencia)
+  aprobarRequerimiento: async (id: number, aprobado = true, userId?: number) => {
+    const payload = aprobado
+      ? {
+          aprobado: true,
+          aprobado_por: userId,
+          fecha_aprobacion: new Date().toISOString()
+        }
+      : {
+          aprobado: false,
+          aprobado_por: null,
+          fecha_aprobacion: null
+        };
+    const response = await api.patch(`/Requerimiento_CajaChica/${id}/`, payload);
     return response.data;
   },
 
@@ -766,213 +859,248 @@ export const ModalRegistrarGasto: React.FC<Props> = ({
      };
      ```
 
-5. **Flujo de Revisión Gerencial en Bandeja de Aprobaciones (`/aprobaciones`)**:
-   * **Propósito y Arquitectura UI:**
-     - En la pestaña **Aprobaciones**, el **Gerente de Operaciones** audita los comprobantes y da el visto bueno a los requerimientos en estado Liquidado (`LQ`).
-     - **Diseño Adaptativo:**
-       - **En PC / Escritorio (`hidden md:flex flex-col`):** Ya **no se muestran tarjetas en cuadrícula**, sino una **vista en lista corrida horizontal** (idéntica a la presentación de *Cierre de Caja*), facilitando la revisión ágil y densa de expedientes.
-       - **En Móviles (`md:hidden`):** Se conservan tarjetas verticales compactas con el selector de revisión en la cabecera.
-     - **Panel de Métricas Exclusivo para Gerente de Operaciones (`esGerenteOperaciones(user)`):**
-       - **Total por Aprobar:** Conteo de requerimientos y monto acumulado total (`S/ Y.YY`).
-       - **Revisados por Gerente:** Cantidad revisada, porcentaje (%) y suma de lo revisado (`S/ X.XX`).
-       - **Falta Revisar:** Cantidad de requerimientos pendientes de visto bueno y suma pendiente (`S/ Z.ZZ`).
-       - **Progreso y Acciones Masivas:** Barra de progreso visual y botón *"Revisar Todo"* (`revisar-masivo`) para auditar en bloque.
-       - **Filtros Rápidos:** Píldoras *"Todos"*, *"Falta revisar"* y *"Revisados"*.
-     - **Seguridad por Rol:** Otros roles (coordinadores, jefaturas) tienen acceso a la bandeja para auditar, pero **no ven** el panel de recuento de revisión gerencial ni los conmutadores de `revisado`.
+5. **Flujo de Revisión Gerencial en Pantalla de Cierre de Caja (`revisado`)**:
+   * En la pantalla donde el Gerente de Operaciones selecciona los requerimientos a cerrar, cada fila debe incluir un checkbox o switch de revisión:
+     ```tsx
+     import React, { useState } from 'react';
+     import { cajaChicaService } from '../services/cajaChicaService';
+     import { RequerimientoCajaChicaItem } from '../types/cajaChica';
 
-   ```tsx
-   import React, { useState, useMemo } from 'react';
-   import { cajaChicaService } from '../services/cajaChicaService';
-   import { RequerimientoCajaChicaItem } from '../types/cajaChica';
-   import { esGerenteOperaciones } from '../utils/permisos';
+     interface Props {
+       requerimientos: RequerimientoCajaChicaItem[];
+       onActualizarLista: () => void;
+     }
 
-   interface Props {
-     requerimientos: RequerimientoCajaChicaItem[];
-     currentUser: any;
-     onActualizarLista: () => void;
-     onAbrirAuditoria: (req: RequerimientoCajaChicaItem) => void;
-   }
+     export const TablaCierreGerencia: React.FC<Props> = ({ requerimientos, onActualizarLista }) => {
+       const [loadingId, setLoadingId] = useState<number | null>(null);
 
-   export const BandejaAprobacionesLista: React.FC<Props> = ({
-     requerimientos,
-     currentUser,
-     onActualizarLista,
-     onAbrirAuditoria,
-   }) => {
-     const esGerente = esGerenteOperaciones(currentUser);
-     const [loadingId, setLoadingId] = useState<number | null>(null);
-     const [procesandoMasivo, setProcesandoMasivo] = useState(false);
-     const [filtroRevision, setFiltroRevision] = useState<'TODOS' | 'PENDIENTES' | 'REVISADOS'>('TODOS');
-
-     // Cálculos del Banner de Métricas Gerencial
-     const metricas = useMemo(() => {
-       const totalCount = requerimientos.length;
-       let totalMonto = 0;
-       let revisadosCount = 0;
-       let revisadosMonto = 0;
-
-       for (const r of requerimientos) {
-         const gasto = parseFloat(String(r.total_gastado || r.monto_solicitado || 0)) || 0;
-         totalMonto += gasto;
-         if (r.revisado || r.revision) {
-           revisadosCount += 1;
-           revisadosMonto += gasto;
+       // 1. Conmutar revisión individual
+       const handleToggleRevision = async (req: RequerimientoCajaChicaItem) => {
+         setLoadingId(req.id);
+         try {
+           const nuevoEstado = !req.revisado;
+           await cajaChicaService.revisarRequerimiento(req.id, nuevoEstado);
+           req.revisado = nuevoEstado; // Actualización optimista
+           onActualizarLista();
+         } catch (error) {
+           console.error('Error al cambiar revisión:', error);
+         } finally {
+           setLoadingId(null);
          }
-       }
+       };
 
-       const faltantesCount = totalCount - revisadosCount;
-       const faltantesMonto = Math.max(0, totalMonto - revisadosMonto);
-       const porcentaje = totalCount > 0 ? Math.round((revisadosCount / totalCount) * 100) : 0;
+       // 2. Marcar todos como revisados en lote
+       const handleMarcarTodos = async () => {
+         const idsPendientes = requerimientos.filter(r => !r.revisado).map(r => r.id);
+         if (idsPendientes.length === 0) return;
+         try {
+           await cajaChicaService.revisarRequerimientosMasivo(idsPendientes, true);
+           onActualizarLista();
+         } catch (error) {
+           console.error('Error en revisión masiva:', error);
+         }
+       };
 
-       return { totalCount, totalMonto, revisadosCount, revisadosMonto, faltantesCount, faltantesMonto, porcentaje };
-     }, [requerimientos]);
+       const totalPendientesRevision = requerimientos.filter(r => !r.revisado).length;
 
-     // Conmutar revisión individual con actualización optimista
-     const handleToggleRevision = async (req: RequerimientoCajaChicaItem, e: React.MouseEvent) => {
-       e.stopPropagation();
-       if (loadingId === req.id || procesandoMasivo) return;
-
-       const nuevoEstado = !Boolean(req.revisado || req.revision);
-       setLoadingId(req.id);
-       req.revisado = nuevoEstado; // Optimismo UI
-       try {
-         await cajaChicaService.revisarRequerimiento(req.id, nuevoEstado);
-         onActualizarLista();
-       } catch (error) {
-         req.revisado = !nuevoEstado; // Revertir en caso de falla
-         console.error('Error al cambiar revisión:', error);
-       } finally {
-         setLoadingId(null);
-       }
-     };
-
-     // Revisión masiva en lote
-     const handleRevisarMasivo = async (marcarComo: boolean) => {
-       const pendientes = requerimientos.filter(r => Boolean(r.revisado || r.revision) !== marcarComo);
-       if (pendientes.length === 0 || procesandoMasivo) return;
-
-       setProcesandoMasivo(true);
-       try {
-         await cajaChicaService.revisarRequerimientosMasivo(pendientes.map(p => p.id), marcarComo);
-         onActualizarLista();
-       } catch (error) {
-         console.error('Error en revisión masiva:', error);
-       } finally {
-         setProcesandoMasivo(false);
-       }
-     };
-
-     const listaFiltrada = useMemo(() => {
-       if (!esGerente || filtroRevision === 'TODOS') return requerimientos;
-       if (filtroRevision === 'PENDIENTES') return requerimientos.filter(r => !Boolean(r.revisado || r.revision));
-       return requerimientos.filter(r => Boolean(r.revisado || r.revision));
-     }, [requerimientos, esGerente, filtroRevision]);
-
-     return (
-       <div className="aprobaciones-container space-y-3">
-         {/* Banner de Métricas Gerencial — Solo visible para Gerente de Operaciones */}
-         {esGerente && (
-           <div className="bg-white rounded-2xl p-4 border border-gray-100 shadow-sm grid grid-cols-2 lg:grid-cols-4 gap-2.5 text-xs">
-             <div className="bg-blue-50/50 p-2.5 rounded-xl">
-               <span className="text-[10px] font-bold text-gray-500 uppercase">Total por Aprobar</span>
-               <div className="text-lg font-black text-blue-900">S/ {metricas.totalMonto.toFixed(2)}</div>
-               <span className="text-[10px] text-blue-600">{metricas.totalCount} requerimientos</span>
-             </div>
-
-             <div className="bg-emerald-50/70 p-2.5 rounded-xl">
-               <span className="text-[10px] font-bold text-emerald-700 uppercase">Revisados por Gerente</span>
-               <div className="text-lg font-black text-emerald-600">S/ {metricas.revisadosMonto.toFixed(2)}</div>
-               <span className="text-[10px] text-emerald-700 font-bold">{metricas.revisadosCount} ({metricas.porcentaje}%)</span>
-             </div>
-
-             <div className="bg-amber-50/70 p-2.5 rounded-xl">
-               <span className="text-[10px] font-bold text-amber-800 uppercase">Falta Revisar</span>
-               <div className="text-lg font-black text-amber-600">S/ {metricas.faltantesMonto.toFixed(2)}</div>
-               <span className="text-[10px] text-amber-700 font-bold">{metricas.faltantesCount} requerimientos</span>
-             </div>
-
-             <div className="bg-gray-50 p-2.5 rounded-xl flex flex-col justify-between">
-               <span className="text-[10px] font-bold text-gray-500 uppercase">Progreso: {metricas.revisadosCount}/{metricas.totalCount}</span>
-               <button
-                 type="button"
-                 onClick={() => handleRevisarMasivo(true)}
-                 disabled={metricas.faltantesCount === 0 || procesandoMasivo}
-                 className="w-full py-1.5 px-3 bg-emerald-600 text-white rounded-lg font-black text-[10px]"
-               >
-                 Revisar Todo
-               </button>
-             </div>
+       return (
+         <div className="cierre-caja-revision">
+           <div className="header-acciones">
+             <button
+               type="button"
+               className="btn-secondary"
+               onClick={handleMarcarTodos}
+               disabled={totalPendientesRevision === 0}
+             >
+               Marcar todos como revisados ({totalPendientesRevision} pendientes)
+             </button>
            </div>
-         )}
 
-         {/* Vista Lista en PC / Desktop (similar a Cierre de Caja) */}
-         <div className="hidden md:flex flex-col space-y-2">
-           {listaFiltrada.map(req => {
-             const estaRevisado = Boolean(req.revisado || req.revision);
-             return (
-               <div
-                 key={req.id}
-                 onClick={() => onAbrirAuditoria(req)}
-                 className={`p-3 bg-white rounded-2xl border ${estaRevisado && esGerente ? 'border-emerald-200 bg-emerald-50/15' : 'border-gray-100'} hover:border-blue-200 flex items-center justify-between gap-4 cursor-pointer`}
-               >
-                 <div className="flex items-center gap-3">
-                   {/* Switch / Botón Revisado exclusivo para Gerente de Operaciones */}
-                   {esGerente && (
-                     <button
-                       type="button"
-                       onClick={(e) => handleToggleRevision(req, e)}
-                       disabled={loadingId === req.id}
-                       className={`px-2.5 py-1.5 rounded-xl font-bold text-[10px] border ${estaRevisado ? 'bg-emerald-500 text-white border-emerald-600' : 'bg-gray-50 text-gray-500 border-gray-200'}`}
-                     >
-                       {estaRevisado ? '✅ Revisado' : '⏳ Por revisar'}
-                     </button>
-                   )}
-                   <span className="font-black text-xs">#{req.id}</span>
-                   <div>
-                     <h4 className="text-xs font-black">{req.usuario_id?.full_name || req.usuario_id?.username}</h4>
-                     <span className="text-[10px] text-gray-400">{req.area_id} • {req.fecha_solicitud?.slice(0, 10)}</span>
-                   </div>
-                 </div>
-
-                 <div className="flex items-center gap-3">
-                   <div className="text-right">
-                     <span className="text-[9px] text-gray-400 uppercase font-bold block">Gasto Total</span>
-                     <span className="text-xs font-black">S/ {parseFloat(String(req.total_gastado || 0)).toFixed(2)}</span>
-                   </div>
-                   <button
-                     type="button"
-                     onClick={(e) => { e.stopPropagation(); onAbrirAuditoria(req); }}
-                     className="px-3 py-1.5 bg-blue-50 text-blue-700 rounded-lg text-xs font-bold"
-                   >
-                     Auditar
-                   </button>
-                 </div>
-               </div>
-             );
-           })}
+           <table className="tabla-requerimientos">
+             <thead>
+               <tr>
+                 <th>ID</th>
+                 <th>Solicitante</th>
+                 <th>Monto</th>
+                 <th>Estado</th>
+                 <th>Revisado por Gerente</th>
+               </tr>
+             </thead>
+             <tbody>
+               {requerimientos.map(req => (
+                 <tr key={req.id} className={req.revisado ? 'fila-revisada' : 'fila-pendiente'}>
+                   <td>#{req.id}</td>
+                   <td>{req.usuario_id?.full_name || req.usuario_id?.username}</td>
+                   <td>S/. {req.total_gastado}</td>
+                   <td>{Object.values(req.estado_requerimiento)[0]}</td>
+                   <td>
+                     <label className="switch-revision">
+                       <input
+                         type="checkbox"
+                         checked={Boolean(req.revisado)}
+                         disabled={loadingId === req.id}
+                         onChange={() => handleToggleRevision(req)}
+                       />
+                       <span>{req.revisado ? '✅ Revisado' : '⏳ Pendiente'}</span>
+                     </label>
+                   </td>
+                 </tr>
+               ))}
+             </tbody>
+           </table>
          </div>
+       );
+     };
+     ```
 
-         {/* Vista Tarjetas en Móviles */}
-         <div className="md:hidden flex flex-col space-y-2.5">
-           {listaFiltrada.map(req => (
-             <div key={req.id} className="p-3.5 bg-white rounded-2xl border border-gray-100">
-               {/* Tarjeta móvil con selector de revisión en cabecera */}
-               <div className="flex items-center justify-between">
-                 <span className="font-bold text-xs">#{req.id}</span>
-                 {esGerente && (
-                   <button
-                     type="button"
-                     onClick={(e) => handleToggleRevision(req, e)}
-                     className={`px-2 py-0.5 rounded-md text-[9px] font-bold ${req.revisado ? 'bg-emerald-500 text-white' : 'bg-gray-100 text-gray-500'}`}
-                   >
-                     {req.revisado ? 'Revisado' : 'Por revisar'}
-                   </button>
+6. **Flujo y Renderizado de Pre-Aprobación por Jefes (`aprobado`, `aprobado_por`, `fecha_aprobacion`)**:
+   * **Diferencia Clave con `revisado`**:
+     * **`aprobado` (Pre-Aprobación)**: Realizada por el **Jefe Directo** del área al verificar comprobantes y montos antes de que la liquidación pase a gerencia.
+     * **`revisado` (Revisión Final)**: Realizada por la **Gerencia de Operaciones** en el modal de Cierre Semanal antes de consolidar el saldo de caja chica.
+   
+   * **Cómo Actualizar desde Frontend**:
+     Para pre-aprobar o revertir la pre-aprobación de una liquidación, enviar una petición `PATCH` a `/Requerimiento_CajaChica/<ID>/`:
+     ```typescript
+     // Ejemplo: Pre-aprobar liquidación
+     await api.patch(`/Requerimiento_CajaChica/${reqId}/`, {
+       aprobado: true,
+       aprobado_por: currentUserId // ID del usuario autenticado (número o string)
+       // fecha_aprobacion: opcional, el backend asigna automáticamente la fecha/hora actual si se omite
+     });
+
+     // Ejemplo: Revertir pre-aprobación
+     await api.patch(`/Requerimiento_CajaChica/${reqId}/`, {
+       aprobado: false,
+       aprobado_por: null,
+       fecha_aprobacion: null
+     });
+     ```
+
+   * **Estructura Serializada en Respuesta GET / PATCH**:
+     El backend serializa la auditoría de forma directa y limpia:
+     ```json
+     {
+       "id": 4755,
+       "aprobado": true,
+       "aprobado_por": "Carlos Alberto Mendoza",
+       "fecha_aprobacion": "2026-10-28T15:20:00Z",
+       "revisado": false,
+       "created_by": "Dyland John Echenique Bravo",
+       "usuario_id": {
+         "id": 184,
+         "username": "dechenique",
+         "first_name": "Dyland John",
+         "last_name": "Echenique Bravo",
+         "full_name": "Dyland John Echenique Bravo",
+         "email": "dyland7ebjsud@gmail.com",
+         "area": "Distribución",
+         "puesto": "Auxiliar"
+       },
+       "detalle": [
+         {
+           "id": 8102,
+           "empresa_id": {
+             "url": "https://appsurgicorperu.com/Empresa/1/",
+             "id": 1,
+             "empresa": "SURGICORP S.R.L."
+           },
+           "costo": "120.00"
+         }
+       ]
+     }
+     ```
+     > [!IMPORTANT]
+     > - **`aprobado_por`**: Se serializa como un **`string`** con el nombre completo del jefe (`"Carlos Alberto Mendoza"` o `null`), **NO** como un ID suelto ni como campos divididos `_id` / `_nombre`.
+     > - **`usuario_id`**: Se serializa como el **objeto completo** de usuario solicitante (con su ID, username, nombre completo, área, etc.).
+     > - **`empresa_id`** en cada detalle: Se serializa como el **objeto completo** `{ url, id, empresa }`.
+
+   * **Componente React de Ejemplo: Badge y Botón de Aprobación**:
+     ```tsx
+     import React, { useState } from 'react';
+     import { cajaChicaService } from '../services/cajaChicaService';
+     import { RequerimientoCajaChicaItem } from '../types/cajaChica';
+
+     interface Props {
+       requerimiento: RequerimientoCajaChicaItem;
+       currentUserId: number;
+       esJefe: boolean;
+       onActualizado: (reqActualizado: RequerimientoCajaChicaItem) => void;
+     }
+
+     export const PreAprobacionBadge: React.FC<Props> = ({
+       requerimiento,
+       currentUserId,
+       esJefe,
+       onActualizado,
+     }) => {
+       const [loading, setLoading] = useState(false);
+
+       const handleToggleAprobacion = async () => {
+         setLoading(true);
+         try {
+           const nuevoEstado = !requerimiento.aprobado;
+           // Invocamos el servicio PATCH
+           const dataActualizada = await cajaChicaService.aprobarRequerimiento(
+             requerimiento.id,
+             nuevoEstado,
+             currentUserId
+           );
+           // Notificamos al componente padre para refrescar o actualizar el estado reactivo
+           onActualizado(dataActualizada);
+         } catch (error) {
+           console.error('Error al actualizar pre-aprobación:', error);
+           alert('No se pudo actualizar la pre-aprobación');
+         } finally {
+           setLoading(false);
+         }
+       };
+
+       const formatearFecha = (fechaIso?: string | null) => {
+         if (!fechaIso) return '';
+         return new Date(fechaIso).toLocaleString('es-PE', {
+           dateStyle: 'short',
+           timeStyle: 'short',
+         });
+       };
+
+       return (
+         <div className="pre-aprobacion-container">
+           {requerimiento.aprobado ? (
+             <div className="badge badge-success">
+               <span className="icono">✅</span>
+               <div className="info">
+                 <strong>Pre-Aprobado</strong>
+                 <small>Por: {requerimiento.aprobado_por || 'Jefatura'}</small>
+                 {requerimiento.fecha_aprobacion && (
+                   <small>{formatearFecha(requerimiento.fecha_aprobacion)}</small>
                  )}
                </div>
              </div>
-           ))}
+           ) : (
+             <div className="badge badge-warning">
+               <span className="icono">⏳</span>
+               <div className="info">
+                 <strong>Pendiente de Aprobación</strong>
+                 <small>Esperando visto bueno del jefe de área</small>
+               </div>
+             </div>
+           )}
+
+           {esJefe && (
+             <button
+               type="button"
+               className={`btn-sm ${requerimiento.aprobado ? 'btn-danger' : 'btn-primary'}`}
+               disabled={loading}
+               onClick={handleToggleAprobacion}
+             >
+               {loading
+                 ? 'Guardando...'
+                 : requerimiento.aprobado
+                 ? 'Deshacer Aprobación'
+                 : 'Aprobar Liquidación'}
+             </button>
+           )}
          </div>
-       </div>
-     );
-   };
-   ```
+       );
+     };
+     ```
