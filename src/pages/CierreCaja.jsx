@@ -22,12 +22,17 @@ import {
   Wallet,
   ShieldCheck,
   Clock,
-  ArrowRight
+  ArrowRight,
+  MapPin,
+  Car
 } from 'lucide-react';
 import { useUserStore } from '../store/userStore';
+import { useCatalogoStore } from '../store/catalogoStore';
 import { fetchAuth, extraerMensajeError } from '../utils/fetchAuth';
 import { obtenerTipoCaja } from '../utils/tipoCaja';
 import { esArchivoPdf } from '../utils/archivoUtil';
+import { resolverRutaOEntidad } from '../utils/entidades';
+import { puedeAccederCierreCaja } from '../utils/permisos';
 import ModalVisorComprobante from '../components/ModalVisorComprobante';
 import Toast from '../components/Toast';
 
@@ -77,6 +82,14 @@ const obtenerFechaLunesActual = () => {
 const CierreCaja = () => {
   const navigate = useNavigate();
   const { user } = useUserStore();
+  const { entidades } = useCatalogoStore();
+
+  // Protección estricta: Solo Gerente de Operaciones y Superusuario
+  useEffect(() => {
+    if (user && !puedeAccederCierreCaja(user)) {
+      navigate('/dashboard', { replace: true });
+    }
+  }, [user, navigate]);
 
   const [solicitudesLiquidadas, setSolicitudesLiquidadas] = useState([]);
   const [cargando, setCargando] = useState(true);
@@ -789,48 +802,102 @@ const CierreCaja = () => {
                 </div>
               </div>
 
-              {(solicitudSeleccionada.detalle || solicitudSeleccionada.detalles || []).map((det, idx) => (
-                <div key={det.url || idx} className="p-3 bg-white rounded-xl border border-gray-100 flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-3">
-                    {det.adj_cajachica ? (
-                      <button
-                        type="button"
-                        onClick={() => setImagenModal(det.adj_cajachica)}
-                        className="w-12 h-12 rounded-lg overflow-hidden border border-gray-200 shrink-0 hover:opacity-85 transition-opacity bg-white"
-                        title="Ver comprobante completo"
-                      >
-                        {esArchivoPdf(det.adj_cajachica) ? (
-                          <div className="w-full h-full bg-red-50 text-red-600 flex flex-col items-center justify-center font-bold">
-                            <FileText size={18} />
-                            <span className="text-[7px] font-black uppercase tracking-wider mt-0.5">PDF</span>
-                          </div>
+              {(solicitudSeleccionada.detalle || solicitudSeleccionada.detalles || []).map((det, idx) => {
+                const nombreGasto = typeof det.subgasto_id === 'object' && det.subgasto_id
+                  ? det.subgasto_id.nombre
+                  : (det.subgasto_nombre || 'Gasto');
+                const tipoGasto = det.subgasto_id?.tipogasto_id?.nombre || det.tipogasto_nombre || null;
+                const { ruta } = resolverRutaOEntidad(det, entidades);
+
+                return (
+                  <div key={det.url || det.id || idx} className="p-3 bg-white rounded-2xl border border-gray-100 shadow-sm flex flex-col gap-2">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex items-start gap-3">
+                        {det.adj_cajachica ? (
+                          <button
+                            type="button"
+                            onClick={() => setImagenModal(det.adj_cajachica)}
+                            className="group/img relative w-14 h-14 rounded-xl overflow-hidden border border-gray-200 shrink-0 hover:opacity-90 transition-opacity bg-white"
+                            title="Ver comprobante completo"
+                          >
+                            {esArchivoPdf(det.adj_cajachica) ? (
+                              <div className="w-full h-full bg-red-50 text-red-600 flex flex-col items-center justify-center font-bold">
+                                <FileText size={20} />
+                                <span className="text-[8px] font-black uppercase tracking-wider mt-0.5">PDF</span>
+                              </div>
+                            ) : (
+                              <img src={det.adj_cajachica} alt="Comprobante" className="w-full h-full object-cover" />
+                            )}
+                            <div className="absolute inset-0 bg-brand-dark/40 opacity-0 group-hover/img:opacity-100 flex items-center justify-center text-white transition-opacity">
+                              <Eye size={15} />
+                            </div>
+                          </button>
                         ) : (
-                          <img src={det.adj_cajachica} alt="Comprobante" className="w-full h-full object-cover" />
+                          <div className="w-14 h-14 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center shrink-0 border border-amber-200">
+                            <Receipt size={20} />
+                          </div>
                         )}
-                      </button>
-                    ) : (
-                      <div className="w-12 h-12 rounded-lg bg-gray-100 flex items-center justify-center text-gray-400 shrink-0">
-                        <Receipt size={18} />
-                      </div>
-                    )}
-                    <div>
-                      <div className="flex items-center gap-1.5 flex-wrap">
-                        <h4 className="text-xs font-black text-brand-dark">{det.subgasto_id?.nombre || 'Gasto'}</h4>
-                        {(() => {
-                          const tipoDet = obtenerTipoCaja(det);
-                          return (
-                            <span className={`px-2 py-0.5 rounded-md font-black text-[9px] uppercase border ${tipoDet.claseBadge}`}>
-                              {tipoDet.etiqueta} {tipoDet.nombreEmpresa !== 'Sin Factura' ? `• ${tipoDet.nombreEmpresa}` : ''}
+
+                        <div>
+                          {tipoGasto && (
+                            <span className="text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded-md bg-brand-light text-brand-primary inline-block mb-0.5">
+                              {tipoGasto}
                             </span>
-                          );
-                        })()}
+                          )}
+                          <h4 className="text-xs font-black text-brand-dark leading-snug">{nombreGasto}</h4>
+                          
+                          {/* Ruta de Origen y Destino (relevante para Taxi / Movilidad / Traslados) */}
+                          {ruta && (
+                            <div className="flex items-center gap-1.5 text-[11px] font-bold text-blue-700 bg-blue-50/80 border border-blue-200/60 px-2 py-0.5 rounded-md mt-1 w-fit">
+                              <MapPin size={12} className="text-blue-600 shrink-0" />
+                              <span>{ruta}</span>
+                            </div>
+                          )}
+
+                          <p className="text-[11px] text-gray-500 mt-0.5">{det.detalle || 'Sin descripción'}</p>
+                        </div>
                       </div>
-                      <p className="text-[11px] text-gray-500">{det.detalle || 'Sin descripción'}</p>
+
+                      <div className="text-right shrink-0">
+                        <span className="text-xs font-black text-brand-dark block">
+                          S/ {parseFloat(det.costo || 0).toFixed(2)}
+                        </span>
+                        <span className="text-[10px] text-gray-400">
+                          {det.fecha_gasto ? det.fecha_gasto.slice(0, 10) : ''}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap gap-1 text-[10px] text-gray-500 font-semibold pt-1 border-t border-gray-50">
+                      {(() => {
+                        const tipoDet = obtenerTipoCaja(det);
+                        return (
+                          <span className={`px-2 py-0.5 rounded-md font-black text-[9px] uppercase border ${tipoDet.claseBadge}`}>
+                            {tipoDet.etiqueta} {tipoDet.nombreEmpresa !== 'Sin Factura' ? `• ${tipoDet.nombreEmpresa}` : ''}
+                          </span>
+                        );
+                      })()}
+                      {det.lima_provincia && (
+                        <span className="px-2 py-0.5 bg-gray-50 rounded-md">
+                          {det.lima_provincia === 'L' ? 'Lima' : 'Provincia'}
+                        </span>
+                      )}
+                      {det.nro_factura && <span className="px-2 py-0.5 bg-gray-50 rounded-md">Doc: {det.nro_factura}</span>}
+                      {det.nro_ruc && (
+                        <span className="px-2 py-0.5 bg-gray-50 rounded-md">
+                          RUC: {det.nro_ruc}{det.razon_social ? ` • ${det.razon_social}` : ''}
+                        </span>
+                      )}
+                      {(det.placa_nombre || det.placa) && (
+                        <span className="px-2 py-0.5 bg-amber-50 text-amber-700 rounded-md flex items-center gap-1 font-bold">
+                          <Car size={11} />
+                          {det.placa_nombre || det.placa}
+                        </span>
+                      )}
                     </div>
                   </div>
-                  <span className="text-xs font-black text-brand-dark">S/ {parseFloat(det.costo || 0).toFixed(2)}</span>
-                </div>
-              ))}
+                );
+              })}
             </div>
 
             <div className="px-4 py-2.5 bg-gray-50 border-t border-gray-100 flex justify-end">

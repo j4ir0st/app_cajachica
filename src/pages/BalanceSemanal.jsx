@@ -23,13 +23,16 @@ import {
   X,
   Filter,
   ArrowUpRight,
-  ShieldCheck,
-  ChevronDown
+  ChevronDown,
+  MapPin
 } from 'lucide-react';
 import { useUserStore } from '../store/userStore';
+import { useCatalogoStore } from '../store/catalogoStore';
 import { fetchAuth, extraerMensajeError } from '../utils/fetchAuth';
 import { obtenerTipoCaja, resolverClaveTipoIndividual } from '../utils/tipoCaja';
 import { esArchivoPdf } from '../utils/archivoUtil';
+import { resolverRutaOEntidad } from '../utils/entidades';
+import { puedeAccederBalanceSemanal } from '../utils/permisos';
 import ModalVisorComprobante from '../components/ModalVisorComprobante';
 import Toast from '../components/Toast';
 
@@ -75,6 +78,14 @@ const formatearFechaCorta = (fechaStr) => {
 const BalanceSemanal = () => {
   const navigate = useNavigate();
   const { user } = useUserStore();
+  const { entidades } = useCatalogoStore();
+
+  // Protección estricta: Solo Gerencias (Operaciones o Finanzas) y Superusuario
+  useEffect(() => {
+    if (user && !puedeAccederBalanceSemanal(user)) {
+      navigate('/dashboard', { replace: true });
+    }
+  }, [user, navigate]);
 
   const [saldosSemanales, setSaldosSemanales] = useState([]);
   const [semanaSeleccionada, setSemanaSeleccionada] = useState(null);
@@ -101,6 +112,8 @@ const BalanceSemanal = () => {
   const [imagenModal, setImagenModal] = useState(null);
   const [mostrarModalReporte, setMostrarModalReporte] = useState(false);
   const [mostrarPopupRequerimientos, setMostrarPopupRequerimientos] = useState(false);
+  const [descargandoExcel, setDescargandoExcel] = useState(false);
+  const [descargandoPdf, setDescargandoPdf] = useState(false);
 
   // ============================================================================
   // CARGA DE SALDOS SEMANALES (INFINITE SCROLL CON TOP=10)
@@ -590,68 +603,199 @@ const BalanceSemanal = () => {
     }, 450);
   };
 
-  // Guardar PDF utilizando la ventana de impresión A4 con título asignado
-  const manejarGuardarPDF = () => {
-    manejarImprimirSoloDocumento();
+  // Descargar el reporte oficial en formato PDF generado por el backend vía action exportar_pdf
+  const manejarGuardarPDF = async (semanaParam = null) => {
+    const semana = semanaParam && typeof semanaParam === 'object' && (semanaParam.id || semanaParam.url)
+      ? semanaParam
+      : semanaSeleccionada;
+    if (!semana) return;
+
+    setDescargandoPdf(true);
+    try {
+      const urlsCandidatas = [];
+
+      // 1. Si el registro tiene URL hipervinculada, usar directamente url + exportar_pdf/
+      if (semana.url) {
+        const urlBase = semana.url.replace(/\/$/, '');
+        urlsCandidatas.push(`${urlBase}/exportar_pdf/`);
+      }
+
+      // 2. Rutas directas por ID
+      if (semana.id) {
+        urlsCandidatas.push(`${API_URL}/api/cajachica/RC_SaldoSemanal/${semana.id}/exportar_pdf/`);
+        urlsCandidatas.push(`${API_URL}/RC_SaldoSemanal/${semana.id}/exportar_pdf/`);
+      }
+
+      // 3. Rutas por codigo_cierre
+      if (semana.codigo_cierre) {
+        urlsCandidatas.push(
+          `${API_URL}/api/cajachica/RC_SaldoSemanal/exportar_pdf/?codigo_cierre=${encodeURIComponent(semana.codigo_cierre.trim())}`
+        );
+        urlsCandidatas.push(
+          `${API_URL}/RC_SaldoSemanal/exportar_pdf/?codigo_cierre=${encodeURIComponent(semana.codigo_cierre.trim())}`
+        );
+      }
+
+      let respuesta = null;
+      let exito = false;
+
+      for (const ruta of urlsCandidatas) {
+        try {
+          const res = await fetchAuth(ruta, {
+            headers: {
+              Accept: 'application/pdf, application/octet-stream, */*',
+            },
+          });
+          if (res.ok) {
+            respuesta = res;
+            exito = true;
+            break;
+          }
+        } catch (e) {
+          console.warn(`[BalanceSemanal] Intento fallido en ${ruta}:`, e);
+        }
+      }
+
+      if (!exito || !respuesta) {
+        const errorMsg = respuesta
+          ? await extraerMensajeError(respuesta)
+          : 'No se pudo conectar con el servidor para exportar el archivo PDF.';
+        throw new Error(errorMsg);
+      }
+
+      const blob = await respuesta.blob();
+
+      // Extraer nombre de archivo desde Content-Disposition del backend si está presente
+      let nombreArchivo = `Reporte Semanal - ${semana.codigo_cierre || semana.id}.pdf`;
+      const disposicion = respuesta.headers.get('content-disposition');
+      if (disposicion) {
+        const match = disposicion.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
+        if (match && match[1]) {
+          nombreArchivo = match[1].replace(/['"]/g, '').trim();
+        }
+      }
+
+      const urlBlob = URL.createObjectURL(blob);
+      const enlace = document.createElement('a');
+      enlace.href = urlBlob;
+      enlace.download = nombreArchivo;
+      document.body.appendChild(enlace);
+      enlace.click();
+      document.body.removeChild(enlace);
+      URL.revokeObjectURL(urlBlob);
+
+      setNotificacion({
+        tipo: 'exito',
+        titulo: 'Reporte PDF Descargado',
+        mensaje: `Se descargó con éxito el archivo "${nombreArchivo}".`,
+      });
+    } catch (err) {
+      console.error('[BalanceSemanal] Error al descargar PDF:', err);
+      setNotificacion({
+        tipo: 'error',
+        titulo: 'Error al Exportar PDF',
+        mensaje: err.message || 'Ocurrió un error al generar el archivo PDF desde el servidor.',
+      });
+    } finally {
+      setDescargandoPdf(false);
+    }
   };
 
-  // Exportar el desglose semanal en formato Excel CSV compatible
-  const manejarDescargarExcel = () => {
-    if (!semanaSeleccionada) return;
+  // Exportar el desglose semanal en formato Excel oficial (.xlsx) generado por el backend
+  const manejarDescargarExcel = async (semanaParam = null) => {
+    const semana = semanaParam && typeof semanaParam === 'object' && (semanaParam.id || semanaParam.url) ? semanaParam : semanaSeleccionada;
+    if (!semana) return;
 
-    const filas = [];
-    filas.push(['REPORTE SEMANAL DE CAJA CHICA']);
-    filas.push(['Código de Cierre:', semanaSeleccionada.codigo_cierre]);
-    filas.push(['Período:', `${formatearFechaCorta(semanaSeleccionada.fecha_inicio)} al ${formatearFechaCorta(semanaSeleccionada.fecha_fin)}`]);
-    filas.push(['Saldo Inicial (S/):', saldoInicialVal.toFixed(2)]);
-    filas.push(['Total Gastado (S/):', totalGastoVal.toFixed(2)]);
-    filas.push(['Saldo Final (S/):', saldoFinalVal.toFixed(2)]);
-    filas.push(['Reposición de Fondo (S/):', nuevoIngresoVal.toFixed(2)]);
-    filas.push([]);
+    setDescargandoExcel(true);
+    try {
+      const urlsCandidatas = [];
 
-    reportePorSolicitante.forEach((sol) => {
-      filas.push([`SOLICITANTE: ${sol.nombre}`]);
-      filas.push([
-        `Total Liquidado: S/ ${sol.totalLiquidado.toFixed(2)}`,
-        `Total Gastado: S/ ${sol.totalGastado.toFixed(2)}`,
-        `Cant. Solicitudes: ${sol.cantidadSolicitudes}`
-      ]);
-      filas.push(['# Req', 'Fecha', 'Tipo Caja', 'Categoría', 'Concepto / Subgasto', 'N° Factura / Doc', 'RUC', 'Importe S/']);
-      sol.gastos.forEach((g) => {
-        filas.push([
-          `#${g.reqId}`,
-          g.fecha || '',
-          `Tipo ${g.tipoCaja}`,
-          g.categoria || '',
-          g.subgasto || '',
-          g.nroFactura || '',
-          g.nroRuc || '',
-          g.costo.toFixed(2)
-        ]);
+      // Priorizar url + exportar_excel/ si el registro viene serializado con su URL
+      if (semana.url) {
+        const urlBase = semana.url.replace(/\/$/, '');
+        urlsCandidatas.push(`${urlBase}/exportar_excel/`);
+      }
+
+      if (semana.id) {
+        urlsCandidatas.push(`${API_URL}/api/cajachica/RC_SaldoSemanal/${semana.id}/exportar_excel/`);
+      }
+      if (semana.codigo_cierre) {
+        urlsCandidatas.push(
+          `${API_URL}/api/cajachica/RC_SaldoSemanal/exportar_excel/?codigo_cierre=${encodeURIComponent(semana.codigo_cierre.trim())}`
+        );
+      }
+      if (semana.id) {
+        urlsCandidatas.push(`${API_URL}/RC_SaldoSemanal/${semana.id}/exportar_excel/`);
+      }
+      if (semana.codigo_cierre) {
+        urlsCandidatas.push(
+          `${API_URL}/RC_SaldoSemanal/exportar_excel/?codigo_cierre=${encodeURIComponent(semana.codigo_cierre.trim())}`
+        );
+      }
+
+      let respuesta = null;
+      let exito = false;
+
+      for (const ruta of urlsCandidatas) {
+        try {
+          const res = await fetchAuth(ruta, {
+            headers: {
+              Accept: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/octet-stream, */*',
+            },
+          });
+          if (res.ok) {
+            respuesta = res;
+            exito = true;
+            break;
+          }
+        } catch (e) {
+          console.warn(`[BalanceSemanal] Intento fallido en ${ruta}:`, e);
+        }
+      }
+
+      if (!exito || !respuesta) {
+        const errorMsg = respuesta
+          ? await extraerMensajeError(respuesta)
+          : 'No se pudo conectar con el servidor para exportar el archivo Excel.';
+        throw new Error(errorMsg);
+      }
+
+      const blob = await respuesta.blob();
+
+      // Extraer nombre de archivo desde Content-Disposition del backend si está presente
+      let nombreArchivo = `Reporte de Gastos de Caja Chica - ${semana.codigo_cierre || semana.id}.xlsx`;
+      const disposicion = respuesta.headers.get('content-disposition');
+      if (disposicion) {
+        const match = disposicion.match(/filename[^;=\n]*=((['"]).*?\2|[^;\n]*)/);
+        if (match && match[1]) {
+          nombreArchivo = match[1].replace(/['"]/g, '').trim();
+        }
+      }
+
+      const urlBlob = URL.createObjectURL(blob);
+      const enlace = document.createElement('a');
+      enlace.href = urlBlob;
+      enlace.download = nombreArchivo;
+      document.body.appendChild(enlace);
+      enlace.click();
+      document.body.removeChild(enlace);
+      URL.revokeObjectURL(urlBlob);
+
+      setNotificacion({
+        tipo: 'exito',
+        titulo: 'Reporte Excel Descargado',
+        mensaje: `Se descargó con éxito el archivo "${nombreArchivo}".`,
       });
-      filas.push(['', '', '', '', '', '', 'TOTAL SOLICITANTE:', sol.totalGastado.toFixed(2)]);
-      filas.push([]);
-    });
-
-    filas.push(['TOTAL GENERAL SEMANA (S/):', '', '', '', '', '', '', totalGastoVal.toFixed(2)]);
-
-    const csvContenido = filas
-      .map((fila) =>
-        fila
-          .map((c) => `"${String(c ?? '').replace(/"/g, '""')}"`)
-          .join(';')
-      )
-      .join('\r\n');
-
-    const blob = new Blob(['\uFEFF' + csvContenido], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `Reporte_Semanal_${semanaSeleccionada.codigo_cierre || 'Cierre'}.csv`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('[BalanceSemanal] Error al descargar Excel:', err);
+      setNotificacion({
+        tipo: 'error',
+        titulo: 'Error al Exportar Excel',
+        mensaje: err.message || 'Ocurrió un error al generar el archivo Excel desde el servidor.',
+      });
+    } finally {
+      setDescargandoExcel(false);
+    }
   };
 
   // ============================================================================
@@ -696,14 +840,42 @@ const BalanceSemanal = () => {
           </button>
 
           {semanaSeleccionada && (
-            <button
-              onClick={() => setMostrarModalReporte(true)}
-              className="flex items-center gap-2 px-3 py-2 sm:px-4 sm:py-2 rounded-2xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white text-xs font-black shadow-md shadow-blue-500/20 hover:scale-[1.02] active:scale-[0.98] transition-all"
-              title="Reporte Semanal"
-            >
-              <Printer className="w-5 h-5 sm:w-4 sm:h-4 shrink-0" />
-              <span className="tracking-wide">Reporte Semanal</span>
-            </button>
+            <div className="flex items-center gap-1.5 sm:gap-2">
+              <button
+                type="button"
+                onClick={() => manejarDescargarExcel()}
+                disabled={descargandoExcel}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-2xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black shadow-md shadow-emerald-600/20 hover:scale-[1.02] active:scale-[0.98] transition-all disabled:opacity-50"
+                title="Descargar Reporte en Excel (.xlsx)"
+              >
+                <FileSpreadsheet size={15} className={descargandoExcel ? 'animate-spin' : ''} />
+                <span className="hidden sm:inline">
+                  {descargandoExcel ? 'Descargando...' : 'Exportar Excel'}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => manejarGuardarPDF()}
+                disabled={descargandoPdf}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-2xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-black shadow-md shadow-indigo-600/20 hover:scale-[1.02] active:scale-[0.98] transition-all disabled:opacity-50"
+                title="Descargar Reporte en PDF (.pdf)"
+              >
+                <Download size={15} className={descargandoPdf ? 'animate-spin' : ''} />
+                <span className="hidden sm:inline">
+                  {descargandoPdf ? 'Descargando...' : 'Exportar PDF'}
+                </span>
+              </button>
+
+              <button
+                onClick={() => setMostrarModalReporte(true)}
+                className="flex items-center gap-2 px-3 py-2 sm:px-4 sm:py-2 rounded-2xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white text-xs font-black shadow-md shadow-blue-500/20 hover:scale-[1.02] active:scale-[0.98] transition-all"
+                title="Reporte Semanal"
+              >
+                <Printer className="w-5 h-5 sm:w-4 sm:h-4 shrink-0" />
+                <span className="tracking-wide">Reporte Semanal</span>
+              </button>
+            </div>
           )}
         </div>
       </div>
@@ -795,21 +967,51 @@ const BalanceSemanal = () => {
                     }`}
                   >
                     <div className="flex items-center justify-between">
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setSemanaSeleccionada(sem);
-                          setMostrarPopupRequerimientos(true);
-                        }}
-                        className={`text-xs font-black px-2 py-0.5 rounded-lg transition-all hover:scale-105 active:scale-95 flex items-center gap-1 group/cod ${
-                          seleccionada ? 'bg-white/20 text-white hover:bg-white/30' : 'bg-brand-light text-brand-dark hover:bg-brand-primary/10 hover:text-brand-primary'
-                        }`}
-                        title="Ver requerimientos de este cierre"
-                      >
-                        <span>{sem.codigo_cierre || `Cierre #${sem.id}`}</span>
-                        <Eye size={12} className="opacity-70 group-hover/cod:opacity-100" />
-                      </button>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSemanaSeleccionada(sem);
+                            setMostrarPopupRequerimientos(true);
+                          }}
+                          className={`text-xs font-black px-2 py-0.5 rounded-lg transition-all hover:scale-105 active:scale-95 flex items-center gap-1 group/cod ${
+                            seleccionada ? 'bg-white/20 text-white hover:bg-white/30' : 'bg-brand-light text-brand-dark hover:bg-brand-primary/10 hover:text-brand-primary'
+                          }`}
+                          title="Ver requerimientos de este cierre"
+                        >
+                          <span>{sem.codigo_cierre || `Cierre #${sem.id}`}</span>
+                          <Eye size={12} className="opacity-70 group-hover/cod:opacity-100" />
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            manejarDescargarExcel(sem);
+                          }}
+                          className={`p-1 rounded-md transition-all hover:scale-110 active:scale-95 ${
+                            seleccionada ? 'text-white/80 hover:text-white hover:bg-white/20' : 'text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50'
+                          }`}
+                          title={`Exportar Excel de ${sem.codigo_cierre || `Cierre #${sem.id}`}`}
+                        >
+                          <FileSpreadsheet size={13} />
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            manejarGuardarPDF(sem);
+                          }}
+                          className={`p-1 rounded-md transition-all hover:scale-110 active:scale-95 ${
+                            seleccionada ? 'text-white/80 hover:text-white hover:bg-white/20' : 'text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50'
+                          }`}
+                          title={`Exportar PDF de ${sem.codigo_cierre || `Cierre #${sem.id}`}`}
+                        >
+                          <Download size={13} />
+                        </button>
+                      </div>
 
                       <span className={`text-xs font-black ${seleccionada ? 'text-white' : 'text-brand-primary'}`}>
                         S/ {gasto.toFixed(2)}
@@ -1073,23 +1275,25 @@ const BalanceSemanal = () => {
                 {/* Botón 2: Guardar PDF */}
                 <button
                   type="button"
-                  onClick={manejarGuardarPDF}
-                  title="Guardar como archivo PDF"
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-black shadow-md transition-all"
+                  onClick={() => manejarGuardarPDF()}
+                  disabled={descargandoPdf}
+                  title="Descargar reporte oficial en formato PDF desde el servidor"
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-black shadow-md transition-all disabled:opacity-50"
                 >
-                  <Download size={14} />
-                  <span>Guardar PDF</span>
+                  <Download size={14} className={descargandoPdf ? 'animate-spin' : ''} />
+                  <span>{descargandoPdf ? 'Descargando...' : 'Guardar PDF'}</span>
                 </button>
 
                 {/* Botón 3: Descargar en Excel */}
                 <button
                   type="button"
-                  onClick={manejarDescargarExcel}
-                  title="Descargar datos en formato Excel (.csv)"
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black shadow-md transition-all"
+                  onClick={() => manejarDescargarExcel()}
+                  disabled={descargandoExcel}
+                  title="Descargar reporte oficial en formato Excel (.xlsx)"
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black shadow-md transition-all disabled:opacity-50"
                 >
-                  <FileSpreadsheet size={14} />
-                  <span>Descargar en Excel</span>
+                  <FileSpreadsheet size={14} className={descargandoExcel ? 'animate-spin' : ''} />
+                  <span>{descargandoExcel ? 'Generando...' : 'Descargar en Excel'}</span>
                 </button>
 
                 {/* Cerrar Modal */}
@@ -1439,10 +1643,14 @@ const BalanceSemanal = () => {
                   listaDetalles.map((det, idx) => {
                     const nombreSubgasto = det.subgasto_id?.nombre || (typeof det.subgasto_id === 'string' ? det.subgasto_id : 'Gasto');
                     const costoVal = parseFloat(det.costo || 0);
-                    const rutaOrigenDestino = det.origen_nombre && det.destino_nombre
+                    const { ruta } = resolverRutaOEntidad(det, entidades);
+                    const rutaOrigenDestino = ruta || (det.origen_nombre && det.destino_nombre
                       ? `${det.origen_nombre} → ${det.destino_nombre}`
-                      : (det.origen_nombre || det.destino_nombre || '');
-                    const docTexto = det.nro_factura ? `Doc: ${det.nro_factura}` : (det.nro_ruc ? `RUC: ${det.nro_ruc}` : '');
+                      : (det.origen_nombre || det.destino_nombre || ''));
+                    const rucConRazon = det.nro_ruc ? `RUC: ${det.nro_ruc}${det.razon_social ? ` • ${det.razon_social}` : ''}` : '';
+                    const docTexto = det.nro_factura
+                      ? `Doc: ${det.nro_factura}${rucConRazon ? ` • ${rucConRazon}` : ''}`
+                      : rucConRazon;
                     const tipoIndividual = obtenerTipoCaja(det);
 
                     return (
@@ -1483,7 +1691,10 @@ const BalanceSemanal = () => {
                               )}
                             </div>
                             {rutaOrigenDestino && (
-                              <p className="text-[11px] text-brand-primary font-semibold mt-0.5 truncate">{rutaOrigenDestino}</p>
+                              <div className="flex items-center gap-1.5 text-[11px] font-bold text-blue-700 bg-blue-50/80 border border-blue-200/60 px-2 py-0.5 rounded-md mt-1 w-fit">
+                                <MapPin size={12} className="text-blue-600 shrink-0" />
+                                <span>{rutaOrigenDestino}</span>
+                              </div>
                             )}
                             {(det.placa_nombre || det.placa) && (
                               <span className="text-[10px] text-amber-700 font-bold block mt-0.5">

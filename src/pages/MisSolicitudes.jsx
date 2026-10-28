@@ -16,13 +16,16 @@ import {
   User,
   Building,
   X,
-  Send,
-  FileText
+  FileText,
+  Trash2,
+  MapPin
 } from 'lucide-react';
 import { useUserStore } from '../store/userStore';
+import { useCatalogoStore } from '../store/catalogoStore';
 import { fetchAuth } from '../utils/fetchAuth';
 import { obtenerTipoCaja } from '../utils/tipoCaja';
 import { esArchivoPdf } from '../utils/archivoUtil';
+import { resolverRutaOEntidad } from '../utils/entidades';
 import ModalVisorComprobante from '../components/ModalVisorComprobante';
 import Toast from '../components/Toast';
 
@@ -146,6 +149,7 @@ const MisSolicitudes = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const { user } = useUserStore();
+  const { entidades } = useCatalogoStore();
 
   const [solicitudes, setSolicitudes] = useState([]);
   const [cargando, setCargando] = useState(true);
@@ -178,6 +182,8 @@ const MisSolicitudes = () => {
   const [imagenModal, setImagenModal] = useState(null);
   const [liquidando, setLiquidando] = useState(false);
   const [obsLiquidacion, setObsLiquidacion] = useState('');
+  const [solicitudAEliminar, setSolicitudAEliminar] = useState(null);
+  const [eliminando, setEliminando] = useState(false);
 
   // Sincronización y fallback de comprobantes al abrir el modal
   useEffect(() => {
@@ -476,6 +482,58 @@ const MisSolicitudes = () => {
   };
 
   // ============================================================================
+  // ACCIÓN DE ELIMINAR REQUERIMIENTO (SOLO PENDIENTES / BORRADORES)
+  // ============================================================================
+
+  const confirmarEliminarRequerimiento = async (req) => {
+    if (!req?.id) return;
+
+    const clave = obtenerClaveEstado(req.estado_requerimiento);
+    if (clave !== 'PD') {
+      setNotificacion({
+        tipo: 'advertencia',
+        titulo: 'Operación no permitida',
+        mensaje: 'No se puede eliminar una solicitud que ya ha sido liquidada o cerrada.',
+      });
+      setSolicitudAEliminar(null);
+      return;
+    }
+
+    setEliminando(true);
+    try {
+      const res = await fetchAuth(`${API_URL}/Requerimiento_CajaChica/${req.id}/?format=json`, {
+        method: 'DELETE',
+      });
+
+      if (!res.ok && res.status !== 204) {
+        const errorDetallado = await extraerMensajeError(res);
+        throw new Error(errorDetallado);
+      }
+
+      setSolicitudes((prev) => prev.filter((s) => s.id !== req.id));
+
+      if (solicitudSeleccionada?.id === req.id) {
+        setSolicitudSeleccionada(null);
+      }
+
+      setNotificacion({
+        tipo: 'exito',
+        titulo: 'Solicitud Eliminada',
+        mensaje: `La solicitud #${req.id} ha sido eliminada correctamente.`,
+      });
+    } catch (err) {
+      setNotificacion({
+        tipo: 'error',
+        titulo: 'Error al Eliminar',
+        mensaje: err.message || 'No se pudo eliminar la solicitud.',
+      });
+    } finally {
+      setEliminando(false);
+      setSolicitudAEliminar(null);
+    }
+  };
+
+  // ============================================================================
   // RENDERIZADO
   // ============================================================================
 
@@ -664,16 +722,29 @@ const MisSolicitudes = () => {
 
                   <div className="mt-2 pt-1.5 border-t border-gray-50 flex items-center justify-between">
                     {claveEstado === 'PD' ? (
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          navigate('/nueva-solicitud', { state: { requerimientoAEditar: req } });
-                        }}
-                        className="text-[10px] font-black text-amber-700 hover:text-amber-800 bg-amber-50 hover:bg-amber-100 px-2.5 py-1 rounded-lg border border-amber-200 flex items-center gap-1 transition-all shadow-sm"
-                      >
-                        <span>✏️ Continuar Llenado</span>
-                      </button>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            navigate('/nueva-solicitud', { state: { requerimientoAEditar: req } });
+                          }}
+                          className="text-[10px] font-black text-amber-700 hover:text-amber-800 bg-amber-50 hover:bg-amber-100 px-2.5 py-1 rounded-lg border border-amber-200 flex items-center gap-1 transition-all shadow-sm"
+                        >
+                          <span>✏️ Continuar Llenado</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSolicitudAEliminar(req);
+                          }}
+                          title="Eliminar solicitud pendiente"
+                          className="p-1 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 border border-transparent hover:border-red-100 transition-all"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
                     ) : (
                       <span className="text-[10px] text-brand-primary font-bold">Ver detalle completo</span>
                     )}
@@ -842,9 +913,10 @@ const MisSolicitudes = () => {
                           ? det.subgasto_id.nombre
                           : (typeof det.subgasto_id === 'string' ? det.subgasto_id : 'Comprobante de Gasto');
                       const tipoGasto = det.subgasto_id?.tipogasto_id?.nombre || null;
-                      const rutaOrigenDestino = det.origen_nombre && det.destino_nombre
+                      const { ruta } = resolverRutaOEntidad(det, entidades);
+                      const rutaOrigenDestino = ruta || (det.origen_nombre && det.destino_nombre
                         ? `${det.origen_nombre} → ${det.destino_nombre}`
-                        : (det.origen_nombre || det.destino_nombre || null);
+                        : (det.origen_nombre || det.destino_nombre || null));
 
                       return (
                         <div
@@ -892,9 +964,10 @@ const MisSolicitudes = () => {
                                   {nombreSubgasto}
                                 </h4>
                                 {rutaOrigenDestino && (
-                                  <p className="text-[11px] text-brand-primary font-semibold mt-0.5">
-                                    {rutaOrigenDestino}
-                                  </p>
+                                  <div className="flex items-center gap-1.5 text-[11px] font-bold text-blue-700 bg-blue-50/80 border border-blue-200/60 px-2 py-0.5 rounded-md mt-1 w-fit">
+                                    <MapPin size={12} className="text-blue-600 shrink-0" />
+                                    <span>{rutaOrigenDestino}</span>
+                                  </div>
                                 )}
                                 <p className="text-[11px] text-gray-500 mt-0.5">
                                   {det.detalle || 'Sin descripción'}
@@ -930,7 +1003,9 @@ const MisSolicitudes = () => {
                               <span className="px-2 py-0.5 bg-gray-50 rounded-md">Doc: {det.nro_factura}</span>
                             )}
                             {det.nro_ruc && (
-                              <span className="px-2 py-0.5 bg-gray-50 rounded-md">RUC: {det.nro_ruc}</span>
+                              <span className="px-2 py-0.5 bg-gray-50 rounded-md">
+                                RUC: {det.nro_ruc}{det.razon_social ? ` • ${det.razon_social}` : ''}
+                              </span>
                             )}
                             {(det.placa_nombre || det.placa) && (
                               <span className="px-2 py-0.5 bg-amber-50 text-amber-700 rounded-md">
@@ -985,20 +1060,31 @@ const MisSolicitudes = () => {
             {/* Pie del Modal */}
             <div className="px-5 py-3 bg-gray-50 border-t border-gray-100 flex items-center justify-between shrink-0">
               {obtenerClaveEstado(solicitudSeleccionada.estado_requerimiento) === 'PD' ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    const req = {
-                      ...solicitudSeleccionada,
-                      detalle: detallesModal.length > 0 ? detallesModal : (solicitudSeleccionada.detalle || solicitudSeleccionada.detalles),
-                    };
-                    setSolicitudSeleccionada(null);
-                    navigate('/nueva-solicitud', { state: { requerimientoAEditar: req } });
-                  }}
-                  className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-black flex items-center gap-1.5 shadow-md shadow-amber-500/20 transition-all"
-                >
-                  <span>✏️ Continuar Llenado</span>
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const req = {
+                        ...solicitudSeleccionada,
+                        detalle: detallesModal.length > 0 ? detallesModal : (solicitudSeleccionada.detalle || solicitudSeleccionada.detalles),
+                      };
+                      setSolicitudSeleccionada(null);
+                      navigate('/nueva-solicitud', { state: { requerimientoAEditar: req } });
+                    }}
+                    className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-white text-xs font-black flex items-center gap-1.5 shadow-md shadow-amber-500/20 transition-all"
+                  >
+                    <span>✏️ Continuar Llenado</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setSolicitudAEliminar(solicitudSeleccionada)}
+                    className="px-3.5 py-2 rounded-xl border border-red-200 text-red-600 hover:bg-red-50 text-xs font-black flex items-center gap-1.5 transition-all"
+                  >
+                    <Trash2 size={13} />
+                    <span>Eliminar</span>
+                  </button>
+                </div>
               ) : <div />}
 
               <button
@@ -1007,6 +1093,52 @@ const MisSolicitudes = () => {
                 className="px-5 py-2 rounded-xl border border-gray-200 text-xs font-bold text-gray-600 hover:bg-white transition-all"
               >
                 Cerrar
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* ========================================================================
+          MODAL DE CONFIRMACIÓN PARA ELIMINAR SOLICITUD PENDIENTE / BORRADOR
+         ======================================================================== */}
+      {solicitudAEliminar && createPortal(
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-brand-dark/70 backdrop-blur-sm p-4 animate-fade-in">
+          <div className="bg-white rounded-3xl p-6 max-w-sm w-full shadow-2xl border border-gray-100 space-y-4 animate-scale-up text-center">
+            <div className="w-12 h-12 rounded-2xl bg-red-50 text-red-600 flex items-center justify-center mx-auto">
+              <Trash2 size={24} />
+            </div>
+
+            <div className="space-y-1">
+              <span className="text-[10px] font-black uppercase tracking-wider text-red-600 bg-red-50 px-2 py-0.5 rounded-md">
+                Confirmación de Eliminación
+              </span>
+              <h3 className="text-base font-black text-brand-dark">
+                ¿Eliminar solicitud #{solicitudAEliminar.id}?
+              </h3>
+              <p className="text-xs text-gray-500 leading-relaxed">
+                Esta solicitud está en estado <span className="font-bold text-amber-700">Pendiente / Borrador</span>. Al eliminarla, se descartarán todos los comprobantes asociados. Esta acción no se puede deshacer.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 pt-2">
+              <button
+                type="button"
+                disabled={eliminando}
+                onClick={() => setSolicitudAEliminar(null)}
+                className="py-2.5 px-4 rounded-xl border border-gray-200 text-xs font-bold text-gray-600 hover:bg-gray-50 transition-all disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                disabled={eliminando}
+                onClick={() => confirmarEliminarRequerimiento(solicitudAEliminar)}
+                className="py-2.5 px-4 rounded-xl bg-red-600 hover:bg-red-700 text-white text-xs font-black shadow-md shadow-red-600/20 transition-all flex items-center justify-center gap-1.5 disabled:opacity-50"
+              >
+                {eliminando ? <RefreshCw size={13} className="animate-spin" /> : <Trash2 size={13} />}
+                <span>{eliminando ? 'Eliminando...' : 'Sí, eliminar'}</span>
               </button>
             </div>
           </div>

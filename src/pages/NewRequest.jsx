@@ -210,6 +210,7 @@ const mapearDetallesExistentes = (detallesLista) => {
       empresa_id: extraerEmpresaId(d.empresa_id !== undefined ? d.empresa_id : d.empresa),
       nro_factura: d.nro_factura || '',
       nro_ruc: d.nro_ruc || '',
+      razon_social: d.razon_social || '',
       placa_id: placaId,
       placa: placaTexto,
       placa_nombre: placaNombre,
@@ -446,6 +447,7 @@ const NewRequest = () => {
           if (provUrl) formData.append('provincia_id', provUrl);
           if (det.nro_factura) formData.append('nro_factura', det.nro_factura);
           if (det.nro_ruc) formData.append('nro_ruc', det.nro_ruc);
+          if (det.razon_social) formData.append('razon_social', det.razon_social);
           const empUrl = extraerEmpresaUrl(det.empresa_id);
           if (empUrl) {
             formData.append('empresa_id', empUrl);
@@ -593,6 +595,7 @@ const NewRequest = () => {
             if (provUrl) formData.append('provincia_id', provUrl);
             if (det.nro_factura) formData.append('nro_factura', det.nro_factura);
             if (det.nro_ruc) formData.append('nro_ruc', det.nro_ruc);
+            if (det.razon_social) formData.append('razon_social', det.razon_social);
             const empUrl = extraerEmpresaUrl(det.empresa_id);
             if (empUrl) {
               formData.append('empresa_id', empUrl);

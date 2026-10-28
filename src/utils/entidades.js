@@ -112,3 +112,107 @@ export const esEntidadValidaEntrega = (ent) => {
 
   return true;
 };
+
+/**
+ * Extrae de forma segura el ID numérico de una URL o valor.
+ */
+export const extraerIdDeUrl = (urlOId) => {
+  if (!urlOId) return null;
+  if (typeof urlOId === 'number') return urlOId;
+  if (typeof urlOId === 'string') {
+    const partes = urlOId.split('/').filter(Boolean);
+    const ultimo = partes[partes.length - 1];
+    const num = parseInt(ultimo, 10);
+    return isNaN(num) ? null : num;
+  }
+  return null;
+};
+
+/**
+ * Resuelve el texto legible de una entidad a partir de un objeto, URL, ID o nombre directo,
+ * buscando en el catálogo de entidades en memoria como respaldo si es necesario.
+ */
+export const resolverNombreEntidad = (entidadOUrl, nombreDirecto = '', entidades = []) => {
+  if (nombreDirecto && typeof nombreDirecto === 'string' && nombreDirecto.trim()) {
+    return nombreDirecto.trim();
+  }
+  if (!entidadOUrl) return '';
+
+  if (typeof entidadOUrl === 'object') {
+    return obtenerNombreEntidadLimpio(entidadOUrl);
+  }
+
+  // Buscar en el catálogo de entidades cargado en memoria
+  if (Array.isArray(entidades) && entidades.length > 0) {
+    const idBuscado = extraerIdDeUrl(entidadOUrl);
+    const encontrada = entidades.find((e) => {
+      if (e.url && entidadOUrl && e.url === entidadOUrl) return true;
+      if (idBuscado !== null && e.id === idBuscado) return true;
+      if (typeof entidadOUrl === 'string' && e.url && e.url.includes(entidadOUrl)) return true;
+      return false;
+    });
+    if (encontrada) {
+      return obtenerNombreEntidadLimpio(encontrada);
+    }
+  }
+
+  // Si no es URL, devolver la cadena si no contiene barras
+  if (typeof entidadOUrl === 'string' && !entidadOUrl.startsWith('http') && !entidadOUrl.includes('/')) {
+    return entidadOUrl.trim();
+  }
+
+  return '';
+};
+
+/**
+ * Resuelve la ruta (origen ➔ destino) o sede para un comprobante o detalle de gasto.
+ * Especialmente relevante para gastos de tipo taxi, movilidad o transporte.
+ */
+export const resolverRutaOEntidad = (det, entidades = []) => {
+  if (!det) return { origen: '', destino: '', ruta: '' };
+
+  const origen = resolverNombreEntidad(
+    det.origen || det.origen_url,
+    det.origen_nombre,
+    entidades
+  );
+
+  const destino = resolverNombreEntidad(
+    det.destino || det.destino_url,
+    det.destino_nombre,
+    entidades
+  );
+
+  let ruta = '';
+  if (origen && destino) {
+    ruta = `${origen} → ${destino}`;
+  } else if (origen) {
+    ruta = `Origen: ${origen}`;
+  } else if (destino) {
+    ruta = `Destino: ${destino}`;
+  }
+
+  return { origen, destino, ruta };
+};
+
+/**
+ * Determina si un gasto corresponde a Taxi o Movilidad.
+ */
+export const esGastoTipoTaxi = (det) => {
+  if (!det) return false;
+  const texto = [
+    det.subgasto_id?.nombre,
+    det.subgasto_id?.tipogasto_id?.nombre,
+    typeof det.subgasto_id === 'string' ? det.subgasto_id : '',
+    det.subgasto_nombre,
+    det.tipogasto_nombre,
+    det.detalle,
+  ].filter(Boolean).join(' ').toLowerCase();
+
+  return (
+    texto.includes('taxi') ||
+    texto.includes('movilidad') ||
+    texto.includes('transporte') ||
+    texto.includes('traslado')
+  );
+};

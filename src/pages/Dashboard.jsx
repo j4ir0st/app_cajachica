@@ -26,6 +26,11 @@ import {
 import { useUserStore } from '../store/userStore';
 import { fetchAuth, extraerMensajeError } from '../utils/fetchAuth';
 import { obtenerTipoCaja } from '../utils/tipoCaja';
+import {
+  puedeAccederAprobaciones,
+  puedeAccederCierreCaja,
+  puedeAccederBalanceSemanal
+} from '../utils/permisos';
 import Toast from '../components/Toast';
 
 const API_URL = import.meta.env.DEV ? '' : (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
@@ -71,13 +76,15 @@ const ESTADOS_MAPA = {
 
 /**
  * Determina si el usuario tiene rol de Gestión / Supervisión.
+ * Se delega a las funciones de permisos oficiales.
  */
 const esRolGestion = (usuario) => {
   if (!usuario) return false;
-  if (usuario.is_superuser || usuario.is_staff) return true;
-  const puesto = (usuario.puesto || '').toLowerCase();
-  return ['gerente', 'jefe', 'coordinador', 'supervisor', 'planner', 'administrador', 'admin'].some((r) =>
-    puesto.includes(r)
+  if (usuario.is_superuser) return true;
+  return (
+    puedeAccederAprobaciones(usuario) ||
+    puedeAccederCierreCaja(usuario) ||
+    puedeAccederBalanceSemanal(usuario)
   );
 };
 
@@ -129,7 +136,10 @@ const Dashboard = () => {
   const navigate = useNavigate();
   const { user } = useUserStore();
 
-  const esGestion = useMemo(() => esRolGestion(user), [user]);
+  const puedeAprobar = useMemo(() => puedeAccederAprobaciones(user), [user]);
+  const puedeCierre = useMemo(() => puedeAccederCierreCaja(user), [user]);
+  const puedeBalance = useMemo(() => puedeAccederBalanceSemanal(user), [user]);
+  const esGestion = useMemo(() => puedeAprobar || puedeCierre || puedeBalance, [puedeAprobar, puedeCierre, puedeBalance]);
 
   // Si es supervisor o gerente, permite alternar entre vista ejecutiva y personal
   const [vistaModo, setVistaModo] = useState('gestion'); // 'gestion' | 'personal'
@@ -377,33 +387,35 @@ const Dashboard = () => {
         <div className="space-y-4 sm:space-y-6">
           {/* Fila de Tarjetas KPI Móviles / Ejecutivas */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5 sm:gap-4">
-            {/* KPI 1: Pendientes de Aprobación (Urgente) */}
-            <div
-              onClick={() => navigate('/aprobaciones')}
-              className="bg-white rounded-2xl p-3.5 sm:p-5 border border-gray-100 hover:border-blue-300 shadow-sm hover:shadow-md transition-all cursor-pointer group flex flex-col justify-between"
-            >
-              <div className="flex items-center justify-between mb-2 sm:mb-3">
-                <div className="w-9 h-9 sm:w-11 sm:h-11 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center font-black group-hover:scale-105 transition-transform">
-                  <FileCheck size={20} />
+            {/* KPI 1: Pendientes de Aprobación (Urgente - Coordinadores, Jefes y Gerentes) */}
+            {puedeAprobar && (
+              <div
+                onClick={() => navigate('/aprobaciones')}
+                className="bg-white rounded-2xl p-3.5 sm:p-5 border border-gray-100 hover:border-blue-300 shadow-sm hover:shadow-md transition-all cursor-pointer group flex flex-col justify-between"
+              >
+                <div className="flex items-center justify-between mb-2 sm:mb-3">
+                  <div className="w-9 h-9 sm:w-11 sm:h-11 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center font-black group-hover:scale-105 transition-transform">
+                    <FileCheck size={20} />
+                  </div>
+                  {metricasGestion.cantPorAprobar > 0 && (
+                    <span className="text-[9px] sm:text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 animate-pulse">
+                      Por Revisar
+                    </span>
+                  )}
                 </div>
-                {metricasGestion.cantPorAprobar > 0 && (
-                  <span className="text-[9px] sm:text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 animate-pulse">
-                    Por Revisar
+                <div>
+                  <span className="text-[10px] sm:text-xs font-bold text-gray-400 uppercase tracking-wider block">
+                    Por Aprobar (LQ)
                   </span>
-                )}
+                  <h3 className="text-xl sm:text-2xl font-black text-brand-dark tracking-tight mt-0.5">
+                    {cargando ? '—' : `${metricasGestion.cantPorAprobar} rend.`}
+                  </h3>
+                  <span className="text-[11px] font-bold text-blue-600 block mt-0.5">
+                    {cargando ? '...' : formatearMoneda(metricasGestion.montoPorAprobar)}
+                  </span>
+                </div>
               </div>
-              <div>
-                <span className="text-[10px] sm:text-xs font-bold text-gray-400 uppercase tracking-wider block">
-                  Por Aprobar (LQ)
-                </span>
-                <h3 className="text-xl sm:text-2xl font-black text-brand-dark tracking-tight mt-0.5">
-                  {cargando ? '—' : `${metricasGestion.cantPorAprobar} rend.`}
-                </h3>
-                <span className="text-[11px] font-bold text-blue-600 block mt-0.5">
-                  {cargando ? '...' : formatearMoneda(metricasGestion.montoPorAprobar)}
-                </span>
-              </div>
-            </div>
+            )}
 
             {/* KPI 2: Borradores en Curso */}
             <div
@@ -431,55 +443,59 @@ const Dashboard = () => {
               </div>
             </div>
 
-            {/* KPI 3: Saldo Vigente de Caja */}
-            <div
-              onClick={() => navigate('/balance')}
-              className="bg-white rounded-2xl p-3.5 sm:p-5 border border-gray-100 hover:border-emerald-300 shadow-sm hover:shadow-md transition-all cursor-pointer group flex flex-col justify-between"
-            >
-              <div className="flex items-center justify-between mb-2 sm:mb-3">
-                <div className="w-9 h-9 sm:w-11 sm:h-11 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center font-black group-hover:scale-105 transition-transform">
-                  <Wallet size={20} />
+            {/* KPI 3: Saldo Vigente de Caja (Solo Gerencias de Operaciones o Finanzas y Superuser) */}
+            {puedeBalance && (
+              <div
+                onClick={() => navigate('/balance')}
+                className="bg-white rounded-2xl p-3.5 sm:p-5 border border-gray-100 hover:border-emerald-300 shadow-sm hover:shadow-md transition-all cursor-pointer group flex flex-col justify-between"
+              >
+                <div className="flex items-center justify-between mb-2 sm:mb-3">
+                  <div className="w-9 h-9 sm:w-11 sm:h-11 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center font-black group-hover:scale-105 transition-transform">
+                    <Wallet size={20} />
+                  </div>
+                  <span className="text-[9px] sm:text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-600">
+                    Caja Chica
+                  </span>
                 </div>
-                <span className="text-[9px] sm:text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-600">
-                  Caja Chica
-                </span>
+                <div>
+                  <span className="text-[10px] sm:text-xs font-bold text-gray-400 uppercase tracking-wider block">
+                    Último Saldo
+                  </span>
+                  <h3 className="text-xl sm:text-2xl font-black text-brand-dark tracking-tight mt-0.5">
+                    {cargando ? '—' : formatearMoneda(metricasGestion.saldoVigente)}
+                  </h3>
+                  <span className="text-[10px] text-gray-400 font-medium block mt-0.5 truncate">
+                    Cierre: {metricasGestion.codigoUltimoCierre}
+                  </span>
+                </div>
               </div>
-              <div>
-                <span className="text-[10px] sm:text-xs font-bold text-gray-400 uppercase tracking-wider block">
-                  Último Saldo
-                </span>
-                <h3 className="text-xl sm:text-2xl font-black text-brand-dark tracking-tight mt-0.5">
-                  {cargando ? '—' : formatearMoneda(metricasGestion.saldoVigente)}
-                </h3>
-                <span className="text-[10px] text-gray-400 font-medium block mt-0.5 truncate">
-                  Cierre: {metricasGestion.codigoUltimoCierre}
-                </span>
-              </div>
-            </div>
+            )}
 
-            {/* KPI 4: Acceso Rápido a Cierre de Caja */}
-            <div
-              onClick={() => navigate('/cierre-caja')}
-              className="bg-gradient-to-br from-brand-primary to-brand-secondary text-white rounded-2xl p-3.5 sm:p-5 shadow-md shadow-brand-primary/20 hover:shadow-lg transition-all cursor-pointer group flex flex-col justify-between"
-            >
-              <div className="flex items-center justify-between mb-2 sm:mb-3">
-                <div className="w-9 h-9 sm:w-11 sm:h-11 rounded-xl bg-white/20 text-white flex items-center justify-center font-black backdrop-blur-sm group-hover:scale-105 transition-transform">
-                  <ShieldCheck size={20} />
+            {/* KPI 4: Acceso Rápido a Cierre de Caja (Solo Gerente de Operaciones y Superuser) */}
+            {puedeCierre && (
+              <div
+                onClick={() => navigate('/cierre-caja')}
+                className="bg-gradient-to-br from-brand-primary to-brand-secondary text-white rounded-2xl p-3.5 sm:p-5 shadow-md shadow-brand-primary/20 hover:shadow-lg transition-all cursor-pointer group flex flex-col justify-between"
+              >
+                <div className="flex items-center justify-between mb-2 sm:mb-3">
+                  <div className="w-9 h-9 sm:w-11 sm:h-11 rounded-xl bg-white/20 text-white flex items-center justify-center font-black backdrop-blur-sm group-hover:scale-105 transition-transform">
+                    <ShieldCheck size={20} />
+                  </div>
+                  <ArrowRight size={16} className="text-white/60 group-hover:translate-x-1 transition-transform" />
                 </div>
-                <ArrowRight size={16} className="text-white/60 group-hover:translate-x-1 transition-transform" />
+                <div>
+                  <span className="text-[10px] sm:text-xs font-bold text-white/70 uppercase tracking-wider block">
+                    Operaciones
+                  </span>
+                  <h3 className="text-lg sm:text-xl font-black text-white tracking-tight mt-0.5">
+                    Cierre de Caja
+                  </h3>
+                  <span className="text-[10px] sm:text-[11px] text-white/80 font-medium block mt-0.5">
+                    Auditar y liquidar ciclo semanal
+                  </span>
+                </div>
               </div>
-              <div>
-                <span className="text-[10px] sm:text-xs font-bold text-white/70 uppercase tracking-wider block">
-                  Operaciones
-                </span>
-                <h3 className="text-lg sm:text-xl font-black text-white tracking-tight mt-0.5">
-                  Cierre de Caja
-                </h3>
-                <span className="text-[10px] sm:text-[11px] text-white/80 font-medium block mt-0.5">
-                  Auditar y liquidar ciclo semanal
-                </span>
-              </div>
-            </div>
+            )}
           </div>
 
           {/* Sección de Rendiciones Urgentes por Aprobar */}

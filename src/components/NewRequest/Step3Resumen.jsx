@@ -223,6 +223,7 @@ const Step3Resumen = ({ cabecera, detalles, enviando, errorEnvio, onEnviarSolici
                     <span>{det.fecha_gasto}</span>
                     <span>• {det.lima_provincia === 'L' ? 'Lima' : `Provincia (${prov?.nombre || '—'})`}</span>
                     {det.nro_factura && <span>• Doc: {det.nro_factura}</span>}
+                    {det.nro_ruc && <span>• RUC: {det.nro_ruc}{det.razon_social ? ` (${det.razon_social})` : ''}</span>}
                     {(det.placa_nombre || det.placa) && <span>• Placa: {det.placa_nombre || det.placa}</span>}
                     {orig && dest && <span>• Ruta: {formatearNombreEntidad(orig)} ➔ {formatearNombreEntidad(dest)}</span>}
                     {orig && !dest && <span>• Sede: {formatearNombreEntidad(orig)}</span>}

@@ -9,13 +9,24 @@ import CierreCaja from './pages/CierreCaja';
 import Aprobaciones from './pages/Aprobaciones';
 import BalanceSemanal from './pages/BalanceSemanal';
 import { useUserStore } from './store/userStore';
+import {
+  puedeAccederAprobaciones,
+  puedeAccederCierreCaja,
+  puedeAccederBalanceSemanal
+} from './utils/permisos';
 
 /**
- * Componente de protección de rutas para verificar autenticación.
+ * Componente de protección de rutas para verificar autenticación y permisos por rol.
  */
-const PrivateRoute = ({ children }) => {
-  const { isAuthenticated } = useUserStore();
-  return isAuthenticated ? children : <Navigate to="/login" replace />;
+const ProtectedRoute = ({ children, permiso }) => {
+  const { isAuthenticated, user } = useUserStore();
+  if (!isAuthenticated) {
+    return <Navigate to="/login" replace />;
+  }
+  if (permiso && !permiso(user)) {
+    return <Navigate to="/dashboard" replace />;
+  }
+  return children;
 };
 
 /**
@@ -31,9 +42,9 @@ function App() {
 
         {/* Rutas Protegidas (Requieren Login) */}
         <Route path="/" element={
-          <PrivateRoute>
+          <ProtectedRoute>
             <MainLayout />
-          </PrivateRoute>
+          </ProtectedRoute>
         }>
           {/* Dashboard como vista principal */}
           <Route index element={<Navigate to="dashboard" replace />} />
@@ -41,9 +52,32 @@ function App() {
           
           <Route path="nueva-solicitud" element={<NewRequest />} />
           <Route path="mis-solicitudes" element={<MisSolicitudes />} />
-          <Route path="aprobaciones" element={<Aprobaciones />} />
-          <Route path="cierre-caja" element={<CierreCaja />} />
-          <Route path="balance" element={<BalanceSemanal />} />
+
+          {/* Rutas con Control de Acceso Estricto */}
+          <Route
+            path="aprobaciones"
+            element={
+              <ProtectedRoute permiso={puedeAccederAprobaciones}>
+                <Aprobaciones />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="cierre-caja"
+            element={
+              <ProtectedRoute permiso={puedeAccederCierreCaja}>
+                <CierreCaja />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="balance"
+            element={
+              <ProtectedRoute permiso={puedeAccederBalanceSemanal}>
+                <BalanceSemanal />
+              </ProtectedRoute>
+            }
+          />
         </Route>
 
         {/* Redirección por defecto a dashboard */}

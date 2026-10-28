@@ -22,12 +22,20 @@ import {
   Copy,
   TrendingUp,
   Send,
-  FileText
+  FileText,
+  MapPin,
+  ShieldCheck,
+  ShieldAlert,
+  SlidersHorizontal,
+  CheckSquare
 } from 'lucide-react';
 import { useUserStore } from '../store/userStore';
+import { useCatalogoStore } from '../store/catalogoStore';
 import { fetchAuth, extraerMensajeError } from '../utils/fetchAuth';
 import { obtenerTipoCaja } from '../utils/tipoCaja';
 import { esArchivoPdf } from '../utils/archivoUtil';
+import { resolverRutaOEntidad } from '../utils/entidades';
+import { esGerenteOperaciones, puedeAccederCierreCaja } from '../utils/permisos';
 import ModalVisorComprobante from '../components/ModalVisorComprobante';
 import Toast from '../components/Toast';
 
@@ -58,6 +66,9 @@ const obtenerNombreSolicitante = (usuario) => {
 const Aprobaciones = () => {
   const navigate = useNavigate();
   const { user } = useUserStore();
+  const { entidades } = useCatalogoStore();
+
+  const esGerente = useMemo(() => esGerenteOperaciones(user), [user]);
 
   const [solicitudes, setSolicitudes] = useState([]);
   const [cargando, setCargando] = useState(true);
@@ -67,6 +78,11 @@ const Aprobaciones = () => {
   // Filtros y Búsqueda
   const [busqueda, setBusqueda] = useState('');
   const [buscandoRemoto, setBuscandoRemoto] = useState(false);
+  const [filtroRevision, setFiltroRevision] = useState('TODOS'); // 'TODOS' | 'PENDIENTES' | 'REVISADOS'
+
+  // Estados de conmutación de revisión gerencial
+  const [conmutandoId, setConmutandoId] = useState(null);
+  const [conmutandoMasivo, setConmutandoMasivo] = useState(false);
 
   // Modal de Auditoría y Visor de Imagen
   const [solicitudAuditoria, setSolicitudAuditoria] = useState(null);
@@ -124,35 +140,148 @@ const Aprobaciones = () => {
   }, []);
 
   // ============================================================================
+  // GESTIÓN DE REVISIÓN GERENCIAL (CAMPO REVISADO / REVISION)
+  // ============================================================================
+
+  const handleToggleRevision = async (req, e) => {
+    if (e) e.stopPropagation();
+    if (conmutandoId === req.id || conmutandoMasivo) return;
+
+    const valorActual = Boolean(req.revisado || req.revision);
+    const nuevoValor = !valorActual;
+    setConmutandoId(req.id);
+
+    // Actualización optimista inmediata en memoria
+    setSolicitudes((prev) =>
+      prev.map((s) => (s.id === req.id ? { ...s, revisado: nuevoValor, revision: nuevoValor } : s))
+    );
+    if (solicitudAuditoria && solicitudAuditoria.id === req.id) {
+      setSolicitudAuditoria((prev) => ({ ...prev, revisado: nuevoValor, revision: nuevoValor }));
+    }
+
+    try {
+      const res = await fetchAuth(`${API_URL}/Requerimiento_CajaChica/${req.id}/revisar/?format=json`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ revisado: nuevoValor }),
+      });
+
+      if (!res.ok) {
+        // Revertir en caso de error
+        setSolicitudes((prev) =>
+          prev.map((s) => (s.id === req.id ? { ...s, revisado: valorActual, revision: valorActual } : s))
+        );
+        if (solicitudAuditoria && solicitudAuditoria.id === req.id) {
+          setSolicitudAuditoria((prev) => ({ ...prev, revisado: valorActual, revision: valorActual }));
+        }
+        const errorDetallado = await extraerMensajeError(res);
+        throw new Error(errorDetallado);
+      }
+    } catch (err) {
+      console.error('[Aprobaciones] Error al conmutar revisión:', err);
+      setNotificacion({
+        tipo: 'error',
+        titulo: 'Error al Marcar Revisión',
+        mensaje: err.message || 'No se pudo actualizar el estado de revisión.',
+      });
+    } finally {
+      setConmutandoId(null);
+    }
+  };
+
+  const handleRevisarMasivo = async (marcarComo = true) => {
+    if (conmutandoMasivo) return;
+
+    const requerimientosAfectados = solicitudesFiltradas.filter(
+      (r) => Boolean(r.revisado || r.revision) !== marcarComo
+    );
+
+    if (requerimientosAfectados.length === 0) return;
+
+    const ids = requerimientosAfectados.map((r) => r.id);
+    const idSet = new Set(ids);
+    setConmutandoMasivo(true);
+
+    // Actualización optimista inmediata
+    setSolicitudes((prev) =>
+      prev.map((s) => (idSet.has(s.id) ? { ...s, revisado: marcarComo, revision: marcarComo } : s))
+    );
+
+    try {
+      const res = await fetchAuth(`${API_URL}/Requerimiento_CajaChica/revisar-masivo/?format=json`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids, revisado: marcarComo }),
+      });
+
+      if (!res.ok) {
+        // Revertir optimismo
+        setSolicitudes((prev) =>
+          prev.map((s) => (idSet.has(s.id) ? { ...s, revisado: !marcarComo, revision: !marcarComo } : s))
+        );
+        const errorDetallado = await extraerMensajeError(res);
+        throw new Error(errorDetallado);
+      }
+
+      setNotificacion({
+        tipo: 'exito',
+        titulo: marcarComo ? 'Revisión Masiva Aplicada' : 'Revisión Limpiada',
+        mensaje: `Se actualizaron ${ids.length} requerimiento(s) como ${marcarComo ? 'revisados' : 'pendientes de revisión'}.`,
+      });
+    } catch (err) {
+      console.error('[Aprobaciones] Error en revisión masiva:', err);
+      setNotificacion({
+        tipo: 'error',
+        titulo: 'Error en Acción Masiva',
+        mensaje: err.message || 'No se pudo aplicar la revisión en lote.',
+      });
+    } finally {
+      setConmutandoMasivo(false);
+    }
+  };
+
+  // ============================================================================
   // FILTRADO REACTIVO EN MEMORIA
   // ============================================================================
 
   const solicitudesFiltradas = useMemo(() => {
-    if (!busqueda.trim()) return solicitudes;
+    let base = solicitudes;
 
-    const query = busqueda.toLowerCase().trim();
-    const querySinHash = query.replace(/^#/, '');
-    return solicitudes.filter((req) => {
-      const idTexto = String(req.id || '').toLowerCase();
-      const solicitanteTexto = obtenerNombreSolicitante(req.usuario_id).toLowerCase();
-      const obsTexto = (req.obs || '').toLowerCase();
-      const areaTexto = String(req.area_id || '').toLowerCase();
-      const detallesTexto = (req.detalle || req.detalles || [])
-        .map((d) => `${d.detalle || ''} ${d.nro_factura || ''} ${d.nro_ruc || ''} ${d.placa_nombre || d.placa || ''} ${d.subgasto_id?.nombre || ''}`)
-        .join(' ')
-        .toLowerCase();
+    if (busqueda.trim()) {
+      const query = busqueda.toLowerCase().trim();
+      const querySinHash = query.replace(/^#/, '');
+      base = base.filter((req) => {
+        const idTexto = String(req.id || '').toLowerCase();
+        const solicitanteTexto = obtenerNombreSolicitante(req.usuario_id).toLowerCase();
+        const obsTexto = (req.obs || '').toLowerCase();
+        const areaTexto = String(req.area_id || '').toLowerCase();
+        const detallesTexto = (req.detalle || req.detalles || [])
+          .map((d) => `${d.detalle || ''} ${d.nro_factura || ''} ${d.nro_ruc || ''} ${d.placa_nombre || d.placa || ''} ${d.subgasto_id?.nombre || ''}`)
+          .join(' ')
+          .toLowerCase();
 
-      return (
-        idTexto === querySinHash ||
-        idTexto.includes(querySinHash) ||
-        idTexto.includes(query) ||
-        solicitanteTexto.includes(query) ||
-        obsTexto.includes(query) ||
-        areaTexto.includes(query) ||
-        detallesTexto.includes(query)
-      );
-    });
-  }, [solicitudes, busqueda]);
+        return (
+          idTexto === querySinHash ||
+          idTexto.includes(querySinHash) ||
+          idTexto.includes(query) ||
+          solicitanteTexto.includes(query) ||
+          obsTexto.includes(query) ||
+          areaTexto.includes(query) ||
+          detallesTexto.includes(query)
+        );
+      });
+    }
+
+    if (esGerente && filtroRevision !== 'TODOS') {
+      if (filtroRevision === 'PENDIENTES') {
+        base = base.filter((r) => !Boolean(r.revisado || r.revision));
+      } else if (filtroRevision === 'REVISADOS') {
+        base = base.filter((r) => Boolean(r.revisado || r.revision));
+      }
+    }
+
+    return base;
+  }, [solicitudes, busqueda, esGerente, filtroRevision]);
 
   // Búsqueda Inteligente: En memoria primero; si no hay coincidencias o se busca por ID no cargado, consultar BD
   useEffect(() => {
@@ -212,8 +341,40 @@ const Aprobaciones = () => {
   }, [busqueda, solicitudes.length, solicitudesFiltradas.length]);
 
   // ============================================================================
-  // TOTALES Y KPIS DE AUDITORÍA
+  // TOTALES Y KPIS DE REVISIÓN GERENCIAL Y AUDITORÍA
   // ============================================================================
+
+  const metricasRevision = useMemo(() => {
+    const totalCount = solicitudes.length;
+    let totalMonto = 0;
+    let revisadosCount = 0;
+    let revisadosMonto = 0;
+
+    for (const req of solicitudes) {
+      const gasto = parseFloat(req.total_gastado || req.monto_solicitado || 0);
+      const montoValido = isNaN(gasto) ? 0 : gasto;
+      totalMonto += montoValido;
+
+      if (req.revisado || req.revision) {
+        revisadosCount += 1;
+        revisadosMonto += montoValido;
+      }
+    }
+
+    const faltantesCount = totalCount - revisadosCount;
+    const faltantesMonto = Math.max(0, totalMonto - revisadosMonto);
+    const porcentajeRevisado = totalCount > 0 ? Math.round((revisadosCount / totalCount) * 100) : 0;
+
+    return {
+      totalCount,
+      totalMonto,
+      revisadosCount,
+      revisadosMonto,
+      faltantesCount,
+      faltantesMonto,
+      porcentajeRevisado,
+    };
+  }, [solicitudes]);
 
   const totalMontoAuditoria = useMemo(() => {
     return solicitudes.reduce((acc, req) => {
@@ -414,65 +575,173 @@ const Aprobaciones = () => {
       {/* Encabezado Principal (Fijo) */}
       <div className="flex items-center justify-between shrink-0">
         <div>
-          <h1 className="text-xl font-black text-brand-dark tracking-tight p-0 m-0">Bandeja de Aprobaciones</h1>
+          <h1 className="text-xl font-black text-brand-dark tracking-tight p-0 m-0">
+            {esGerente ? 'Auditoría y Aprobaciones Gerenciales' : 'Bandeja de Aprobaciones'}
+          </h1>
           <p className="text-xs text-gray-400 mt-0.5 p-0 m-0">
-            Revisión y visto bueno previo de rendiciones liquidadas antes del cierre semanal.
+            {esGerente
+              ? 'Control gerencial de rendiciones liquidadas, revisión de comprobantes y validación previa al cierre.'
+              : 'Revisión y visto bueno previo de rendiciones liquidadas antes del cierre semanal.'}
           </p>
         </div>
 
         <div className="flex items-center gap-2">
           <button
             onClick={cargarSolicitudes}
-            disabled={cargando || procesandoAccion}
+            disabled={cargando || procesandoAccion || conmutandoMasivo}
             className="p-2 rounded-2xl border border-gray-200 hover:border-brand-primary text-gray-500 hover:text-brand-primary bg-white transition-all disabled:opacity-50 shadow-sm"
             title="Recargar rendiciones"
           >
             <RefreshCw size={15} className={cargando ? 'animate-spin text-brand-primary' : ''} />
           </button>
 
-          <button
-            onClick={() => navigate('/cierre-caja')}
-            className="hidden sm:flex items-center gap-1.5 px-3.5 py-2 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white text-xs font-black shadow-md shadow-emerald-500/20 hover:scale-[1.02] active:scale-[0.98] transition-all"
-          >
-            <span>Ir a Cierre de Caja</span>
-            <ArrowRight size={14} />
-          </button>
+          {puedeAccederCierreCaja(user) && (
+            <button
+              onClick={() => navigate('/cierre-caja')}
+              className="hidden sm:flex items-center gap-1.5 px-3.5 py-2 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white text-xs font-black shadow-md shadow-emerald-500/20 hover:scale-[1.02] active:scale-[0.98] transition-all"
+            >
+              <span>Ir a Cierre de Caja</span>
+              <ArrowRight size={14} />
+            </button>
+          )}
         </div>
       </div>
 
-      {/* Panel Superior de Métricas de Revisión */}
-      <div className="bg-white rounded-2xl p-3 sm:p-3.5 border border-gray-100 shadow-sm shrink-0 grid grid-cols-3 gap-2 text-xs">
-        <div className="bg-brand-light/60 rounded-xl px-3 py-1.5">
-          <span className="text-[9px] font-bold text-brand-primary uppercase tracking-wider block">
-            Por Auditar
-          </span>
-          <span className="text-xs sm:text-sm font-black text-brand-dark">
-            {solicitudes.length} rendiciones
-          </span>
-        </div>
+      {/* Panel Superior de Métricas: Solo el Gerente de Operaciones ve el recuento de revisados vs faltantes */}
+      {esGerente ? (
+        <div className="bg-white rounded-2xl p-3 sm:p-4 border border-gray-100 shadow-sm shrink-0 space-y-3">
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5 text-xs">
+            {/* 1. Total por Revisar / Aprobar */}
+            <div className="bg-brand-light/50 border border-gray-100 rounded-xl p-2.5 flex flex-col justify-between">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-black uppercase tracking-wider text-gray-500">
+                  Total por Aprobar
+                </span>
+                <span className="text-[10px] font-bold text-brand-primary bg-white px-2 py-0.5 rounded-md border border-gray-100">
+                  {metricasRevision.totalCount} reg.
+                </span>
+              </div>
+              <div className="mt-1">
+                <span className="text-base sm:text-lg font-black text-brand-dark">
+                  S/ {metricasRevision.totalMonto.toFixed(2)}
+                </span>
+              </div>
+            </div>
 
-        <div className="bg-gray-50 rounded-xl px-3 py-1.5">
-          <span className="text-[9px] font-bold text-gray-400 uppercase tracking-wider block">
-            Total Rendido
-          </span>
-          <span className="text-xs sm:text-sm font-black text-brand-primary">
-            S/ {totalMontoAuditoria.toFixed(2)}
-          </span>
-        </div>
+            {/* 2. Revisados por el Gerente */}
+            <div className="bg-emerald-50/70 border border-emerald-100 rounded-xl p-2.5 flex flex-col justify-between">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-black uppercase tracking-wider text-emerald-700">
+                  Revisados por Gerente
+                </span>
+                <span className="text-[10px] font-black text-emerald-700 bg-white px-2 py-0.5 rounded-md border border-emerald-200">
+                  {metricasRevision.revisadosCount} ({metricasRevision.porcentajeRevisado}%)
+                </span>
+              </div>
+              <div className="mt-1">
+                <span className="text-base sm:text-lg font-black text-emerald-600">
+                  S/ {metricasRevision.revisadosMonto.toFixed(2)}
+                </span>
+              </div>
+            </div>
 
-        <div className="bg-gray-50 rounded-xl px-3 py-1.5">
-          <span className="text-[9px] font-bold text-gray-400 uppercase tracking-wider block">
-            Comprobantes
-          </span>
-          <span className="text-xs sm:text-sm font-black text-gray-700">
-            {totalComprobantes} fotos/docs
-          </span>
-        </div>
-      </div>
+            {/* 3. Falta Revisar */}
+            <div className="bg-amber-50/70 border border-amber-100 rounded-xl p-2.5 flex flex-col justify-between">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-black uppercase tracking-wider text-amber-800">
+                  Falta Revisar
+                </span>
+                <span className="text-[10px] font-black text-amber-800 bg-white px-2 py-0.5 rounded-md border border-amber-200">
+                  {metricasRevision.faltantesCount} reg.
+                </span>
+              </div>
+              <div className="mt-1">
+                <span className="text-base sm:text-lg font-black text-amber-600">
+                  S/ {metricasRevision.faltantesMonto.toFixed(2)}
+                </span>
+              </div>
+            </div>
 
-      {/* Buscador de Solicitudes */}
-      <div className="bg-white px-3 py-2 rounded-2xl border border-gray-100 shadow-sm shrink-0">
-        <div className="relative">
+            {/* 4. Avance y Acciones Rápidas Masivas */}
+            <div className="bg-gray-50 border border-gray-100 rounded-xl p-2.5 flex flex-col justify-between">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-black uppercase tracking-wider text-gray-500">
+                  Progreso Gerencial
+                </span>
+                <span className="text-[10px] font-black text-brand-dark">
+                  {metricasRevision.revisadosCount} / {metricasRevision.totalCount}
+                </span>
+              </div>
+
+              {/* Barra de progreso */}
+              <div className="w-full bg-gray-200 rounded-full h-1.5 my-1.5 overflow-hidden">
+                <div
+                  className="bg-emerald-500 h-1.5 rounded-full transition-all duration-300"
+                  style={{ width: `${metricasRevision.porcentajeRevisado}%` }}
+                />
+              </div>
+
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => handleRevisarMasivo(true)}
+                  disabled={conmutandoMasivo || metricasRevision.faltantesCount === 0}
+                  className="flex-1 py-1 px-2 bg-emerald-600 hover:bg-emerald-700 text-white font-black text-[10px] rounded-lg transition-all disabled:opacity-40 truncate shadow-xs"
+                  title="Marcar todos los requerimientos pendientes como revisados"
+                >
+                  {conmutandoMasivo ? 'Procesando...' : 'Revisar Todo'}
+                </button>
+
+                {metricasRevision.revisadosCount > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => handleRevisarMasivo(false)}
+                    disabled={conmutandoMasivo}
+                    className="py-1 px-2 bg-gray-200 hover:bg-gray-300 text-gray-700 font-bold text-[10px] rounded-lg transition-all disabled:opacity-40 truncate"
+                    title="Desmarcar revisión de todos los requerimientos"
+                  >
+                    Limpiar
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : (
+        /* Panel Estándar de Métricas para otros roles */
+        <div className="bg-white rounded-2xl p-3 sm:p-3.5 border border-gray-100 shadow-sm shrink-0 grid grid-cols-3 gap-2 text-xs">
+          <div className="bg-brand-light/60 rounded-xl px-3 py-1.5">
+            <span className="text-[9px] font-bold text-brand-primary uppercase tracking-wider block">
+              Por Auditar
+            </span>
+            <span className="text-xs sm:text-sm font-black text-brand-dark">
+              {solicitudes.length} rendiciones
+            </span>
+          </div>
+
+          <div className="bg-gray-50 rounded-xl px-3 py-1.5">
+            <span className="text-[9px] font-bold text-gray-400 uppercase tracking-wider block">
+              Total Rendido
+            </span>
+            <span className="text-xs sm:text-sm font-black text-brand-primary">
+              S/ {totalMontoAuditoria.toFixed(2)}
+            </span>
+          </div>
+
+          <div className="bg-gray-50 rounded-xl px-3 py-1.5">
+            <span className="text-[9px] font-bold text-gray-400 uppercase tracking-wider block">
+              Comprobantes
+            </span>
+            <span className="text-xs sm:text-sm font-black text-gray-700">
+              {totalComprobantes} fotos/docs
+            </span>
+          </div>
+        </div>
+      )}
+
+      {/* Buscador de Solicitudes y Filtros de Estado */}
+      <div className="bg-white px-3 py-2 rounded-2xl border border-gray-100 shadow-sm shrink-0 flex flex-col sm:flex-row items-center gap-2">
+        <div className="relative flex-1 w-full">
           <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400" />
           <input
             type="text"
@@ -496,9 +765,48 @@ const Aprobaciones = () => {
             </button>
           )}
         </div>
+
+        {/* Pestañas de Filtro de Revisión (Exclusivo Gerente de Operaciones) */}
+        {esGerente && (
+          <div className="flex items-center gap-1 shrink-0 bg-brand-light/60 p-1 rounded-xl w-full sm:w-auto justify-center">
+            <button
+              type="button"
+              onClick={() => setFiltroRevision('TODOS')}
+              className={`px-2.5 py-1 rounded-lg text-[10px] font-black transition-all ${
+                filtroRevision === 'TODOS'
+                  ? 'bg-white text-brand-dark shadow-xs'
+                  : 'text-gray-500 hover:text-brand-dark'
+              }`}
+            >
+              Todos ({metricasRevision.totalCount})
+            </button>
+            <button
+              type="button"
+              onClick={() => setFiltroRevision('PENDIENTES')}
+              className={`px-2.5 py-1 rounded-lg text-[10px] font-black transition-all ${
+                filtroRevision === 'PENDIENTES'
+                  ? 'bg-amber-500 text-white shadow-xs'
+                  : 'text-amber-700 hover:bg-amber-50'
+              }`}
+            >
+              Falta revisar ({metricasRevision.faltantesCount})
+            </button>
+            <button
+              type="button"
+              onClick={() => setFiltroRevision('REVISADOS')}
+              className={`px-2.5 py-1 rounded-lg text-[10px] font-black transition-all ${
+                filtroRevision === 'REVISADOS'
+                  ? 'bg-emerald-600 text-white shadow-xs'
+                  : 'text-emerald-700 hover:bg-emerald-50'
+              }`}
+            >
+              Revisados ({metricasRevision.revisadosCount})
+            </button>
+          </div>
+        )}
       </div>
 
-      {/* Contenedor Scrollable de Solicitudes para Auditoría */}
+      {/* Contenedor Scrollable de Solicitudes */}
       <div className="flex-1 overflow-y-auto min-h-0 pr-0.5 pb-2">
         {cargando ? (
           <div className="flex flex-col items-center justify-center py-16 space-y-3">
@@ -508,120 +816,285 @@ const Aprobaciones = () => {
             </span>
           </div>
         ) : solicitudesFiltradas.length > 0 ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5">
-            {solicitudesFiltradas.map((req) => {
-              const totalGast = parseFloat(req.total_gastado || req.monto_solicitado || 0);
-              const nombreSolicitante = obtenerNombreSolicitante(req.usuario_id);
-              const numComprobantes = (req.detalle || req.detalles || []).length;
-              const tieneFotosCompletas = (req.detalle || req.detalles || []).every((d) => d.adj_cajachica);
-              const tipoCajaInfo = obtenerTipoCaja(req);
+          <>
+            {/* ================================================================
+                1. VISTA LISTA EN PC / DESKTOP (Similar a Cierre de Caja)
+               ================================================================ */}
+            <div className="hidden md:flex flex-col space-y-2">
+              {solicitudesFiltradas.map((req) => {
+                const estaRevisado = Boolean(req.revisado || req.revision);
+                const totalGast = parseFloat(req.total_gastado || req.monto_solicitado || 0);
+                const nombreSolicitante = obtenerNombreSolicitante(req.usuario_id);
+                const numComprobantes = (req.detalle || req.detalles || []).length;
+                const tipoCajaInfo = obtenerTipoCaja(req);
 
-              return (
-                <div
-                  key={req.id}
-                  className="bg-white rounded-2xl p-3.5 sm:p-4 border border-gray-100 hover:border-brand-primary/40 shadow-sm hover:shadow-md transition-all flex flex-col justify-between border-l-4 border-l-blue-500"
-                >
-                  <div className="space-y-1.5">
-                    <div className="flex items-center justify-between">
+                return (
+                  <div
+                    key={req.id}
+                    onClick={() => setSolicitudAuditoria(req)}
+                    className={`p-3 bg-white hover:bg-blue-50/30 rounded-2xl border ${
+                      estaRevisado && esGerente ? 'border-emerald-200 bg-emerald-50/15' : 'border-gray-100'
+                    } hover:border-blue-200 flex items-center justify-between gap-4 transition-all cursor-pointer group shadow-xs`}
+                  >
+                    {/* Lado izquierdo: Switch revisión (si es gerente), ID, Badge Tipo, Solicitante e info */}
+                    <div className="flex items-center gap-3 min-w-0">
+                      {esGerente && (
+                        <button
+                          type="button"
+                          onClick={(e) => handleToggleRevision(req, e)}
+                          disabled={conmutandoId === req.id || conmutandoMasivo}
+                          className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border font-black text-[10px] transition-all shrink-0 cursor-pointer shadow-xs active:scale-95 ${
+                            estaRevisado
+                              ? 'bg-emerald-500 hover:bg-emerald-600 text-white border-emerald-600'
+                              : 'bg-gray-50 hover:bg-emerald-50 text-gray-500 hover:text-emerald-700 border-gray-200 hover:border-emerald-300'
+                          }`}
+                          title={
+                            estaRevisado
+                              ? 'Revisado por Gerencia. Clic para desmarcar'
+                              : 'Pendiente de revisión. Clic para marcar como revisado'
+                          }
+                        >
+                          {conmutandoId === req.id ? (
+                            <RefreshCw size={12} className="animate-spin text-current" />
+                          ) : estaRevisado ? (
+                            <CheckCircle2 size={13} className="text-white" />
+                          ) : (
+                            <Clock size={13} className="text-gray-400" />
+                          )}
+                          <span>{estaRevisado ? 'Revisado' : 'Por revisar'}</span>
+                        </button>
+                      )}
+
+                      <span className="text-xs font-black text-brand-dark bg-brand-light border border-gray-200/60 px-2 py-1 rounded-lg shrink-0">
+                        #{req.id}
+                      </span>
+
+                      <span
+                        className={`text-[9px] sm:text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded-lg border shrink-0 ${tipoCajaInfo.claseBadge}`}
+                      >
+                        {tipoCajaInfo.etiqueta}
+                      </span>
+
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <h4 className="text-xs sm:text-sm font-black text-brand-dark leading-tight truncate group-hover:text-brand-primary transition-colors">
+                            {nombreSolicitante}
+                          </h4>
+                          <span className="text-[10px] font-bold text-gray-400 shrink-0">
+                            • {req.area_id || 'Área'}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2 text-[10px] text-gray-400 mt-0.5">
+                          <span className="shrink-0">{req.fecha_solicitud ? req.fecha_solicitud.slice(0, 10) : '—'}</span>
+                          <span className="shrink-0">• {numComprobantes} doc(s)</span>
+                          {req.obs && (
+                            <span className="italic truncate max-w-xs lg:max-w-md text-gray-500">
+                              "{req.obs}"
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Lado derecho: Monto Total y Botones de acción */}
+                    <div className="flex items-center gap-3 shrink-0">
+                      <div className="text-right">
+                        <span className="text-[9px] font-bold text-gray-400 uppercase tracking-wider block">
+                          Gasto Total
+                        </span>
+                        <span className="text-xs sm:text-sm font-black text-brand-dark">
+                          S/ {totalGast.toFixed(2)}
+                        </span>
+                      </div>
+
                       <div className="flex items-center gap-1.5">
-                        <span className="text-[11px] font-black text-brand-dark bg-brand-light px-2 py-0.5 rounded-lg">
-                          #{req.id}
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSolicitudAuditoria(req);
+                          }}
+                          className="px-2.5 py-1.5 bg-brand-light hover:bg-brand-primary/10 text-brand-primary rounded-xl transition-colors border border-gray-100 font-black text-xs flex items-center gap-1 shadow-xs"
+                          title="Auditar comprobantes"
+                        >
+                          <Eye size={13} />
+                          <span className="hidden xl:inline">Auditar</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setModalPostergar(req);
+                            setMotivoPostergacion('');
+                          }}
+                          className="p-1.5 sm:px-2.5 sm:py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-700 rounded-xl transition-colors border border-amber-200 font-black text-xs flex items-center gap-1 shadow-xs"
+                          title="Postergar a siguiente semana"
+                        >
+                          <RotateCcw size={13} />
+                          <span className="hidden xl:inline">Postergar</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setModalRechazo(req);
+                            setMotivoRechazo('');
+                          }}
+                          className="p-1.5 sm:px-2.5 sm:py-1.5 bg-red-50 hover:bg-red-100 text-red-600 rounded-xl transition-colors border border-red-200 font-black text-xs flex items-center gap-1 shadow-xs"
+                          title="Rechazar y devolver"
+                        >
+                          <X size={13} />
+                          <span className="hidden xl:inline">Rechazar</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* ================================================================
+                2. VISTA TARJETAS EN MÓVIL
+               ================================================================ */}
+            <div className="md:hidden flex flex-col space-y-2.5">
+              {solicitudesFiltradas.map((req) => {
+                const estaRevisado = Boolean(req.revisado || req.revision);
+                const totalGast = parseFloat(req.total_gastado || req.monto_solicitado || 0);
+                const nombreSolicitante = obtenerNombreSolicitante(req.usuario_id);
+                const numComprobantes = (req.detalle || req.detalles || []).length;
+                const tieneFotosCompletas = (req.detalle || req.detalles || []).every((d) => d.adj_cajachica);
+                const tipoCajaInfo = obtenerTipoCaja(req);
+
+                return (
+                  <div
+                    key={req.id}
+                    className={`bg-white rounded-2xl p-3.5 border ${
+                      estaRevisado && esGerente ? 'border-emerald-300 bg-emerald-50/10' : 'border-gray-100'
+                    } shadow-sm flex flex-col justify-between border-l-4 ${
+                      estaRevisado && esGerente ? 'border-l-emerald-500' : 'border-l-blue-500'
+                    }`}
+                  >
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[11px] font-black text-brand-dark bg-brand-light px-2 py-0.5 rounded-lg">
+                            #{req.id}
+                          </span>
+                          <span
+                            className={`text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded-lg border ${tipoCajaInfo.claseBadge}`}
+                          >
+                            {tipoCajaInfo.etiqueta}
+                          </span>
+                        </div>
+
+                        {esGerente ? (
+                          <button
+                            type="button"
+                            onClick={(e) => handleToggleRevision(req, e)}
+                            disabled={conmutandoId === req.id || conmutandoMasivo}
+                            className={`flex items-center gap-1 px-2 py-0.5 rounded-lg border font-black text-[9px] transition-all shadow-xs ${
+                              estaRevisado
+                                ? 'bg-emerald-500 text-white border-emerald-600'
+                                : 'bg-gray-100 text-gray-500 border-gray-200'
+                            }`}
+                          >
+                            {estaRevisado ? <CheckCircle2 size={11} /> : <Clock size={11} />}
+                            <span>{estaRevisado ? 'Revisado' : 'Por revisar'}</span>
+                          </button>
+                        ) : (
+                          <span className="text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded-lg border bg-blue-50 text-blue-600 border-blue-200 flex items-center gap-1">
+                            <CheckCircle2 size={11} />
+                            Liquidado
+                          </span>
+                        )}
+                      </div>
+
+                      <div>
+                        <h3 className="text-xs sm:text-sm font-black text-brand-dark leading-tight truncate">
+                          {nombreSolicitante}
+                        </h3>
+                        <div className="flex items-center gap-1 text-[11px] text-gray-400 font-medium mt-0.5">
+                          <Calendar size={12} className="text-brand-primary" />
+                          <span>{req.fecha_solicitud ? req.fecha_solicitud.replace('T', ' ').slice(0, 16) : '—'}</span>
+                        </div>
+                        {req.obs && (
+                          <p className="text-[11px] text-gray-600 font-medium mt-0.5 line-clamp-1 italic">
+                            "{req.obs}"
+                          </p>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="mt-2.5 pt-2 border-t border-gray-50 flex items-center justify-between text-xs">
+                      <div>
+                        <span className="text-[9px] font-bold text-gray-400 uppercase tracking-wider block">
+                          Importe Rendido
+                        </span>
+                        <span className="text-xs sm:text-sm font-black text-brand-primary">
+                          S/ {totalGast.toFixed(2)}
+                        </span>
+                      </div>
+
+                      <div className="text-right">
+                        <span className="text-[9px] font-bold text-gray-400 uppercase tracking-wider block">
+                          Fotos / Docs
                         </span>
                         <span
-                          className={`text-[9px] sm:text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded-lg border ${tipoCajaInfo.claseBadge}`}
+                          className={`text-xs font-black flex items-center gap-1 ${
+                            tieneFotosCompletas ? 'text-emerald-600' : 'text-amber-600'
+                          }`}
                         >
-                          {tipoCajaInfo.etiqueta}
+                          <Receipt size={12} />
+                          {numComprobantes} comprobante(s)
                         </span>
                       </div>
-                      <span className="text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded-lg border bg-blue-50 text-blue-600 border-blue-200 flex items-center gap-1">
-                        <CheckCircle2 size={11} />
-                        Liquidado
-                      </span>
                     </div>
 
-                    <div>
-                      <h3 className="text-xs sm:text-sm font-black text-brand-dark leading-tight truncate">
-                        {nombreSolicitante}
-                      </h3>
-                      <div className="flex items-center gap-1 text-[11px] text-gray-400 font-medium mt-0.5">
-                        <Calendar size={12} className="text-brand-primary" />
-                        <span>{req.fecha_solicitud ? req.fecha_solicitud.replace('T', ' ').slice(0, 16) : '—'}</span>
-                      </div>
-                      {req.obs && (
-                        <p className="text-[11px] text-gray-600 font-medium mt-0.5 line-clamp-1 italic">
-                          "{req.obs}"
-                        </p>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="mt-2.5 pt-2 border-t border-gray-50 flex items-center justify-between text-xs">
-                    <div>
-                      <span className="text-[9px] font-bold text-gray-400 uppercase tracking-wider block">
-                        Importe Rendido
-                      </span>
-                      <span className="text-xs sm:text-sm font-black text-brand-primary">
-                        S/ {totalGast.toFixed(2)}
-                      </span>
-                    </div>
-
-                    <div className="text-right">
-                      <span className="text-[9px] font-bold text-gray-400 uppercase tracking-wider block">
-                        Fotos / Docs
-                      </span>
-                      <span
-                        className={`text-xs font-black flex items-center gap-1 ${
-                          tieneFotosCompletas ? 'text-emerald-600' : 'text-amber-600'
-                        }`}
+                    {/* Acciones de Revisión Previa */}
+                    <div className="mt-2.5 pt-2 border-t border-gray-50 grid grid-cols-3 gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setSolicitudAuditoria(req)}
+                        className="py-1.5 px-2 bg-brand-light hover:bg-brand-primary/10 text-brand-primary font-black text-[10px] rounded-lg flex items-center justify-center gap-1 transition-all truncate"
+                        title="Ver todos los comprobantes y fotos"
                       >
-                        <Receipt size={12} />
-                        {numComprobantes} comprobante(s)
-                      </span>
+                        <Eye size={12} />
+                        <span>Revisar</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setModalPostergar(req);
+                          setMotivoPostergacion('');
+                        }}
+                        className="py-1.5 px-2 bg-amber-50 hover:bg-amber-100 text-amber-700 font-black text-[10px] rounded-lg border border-amber-200 flex items-center justify-center gap-1 transition-all truncate"
+                        title="Mover o postergar para el próximo cierre"
+                      >
+                        <RotateCcw size={12} />
+                        <span>Postergar</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setModalRechazo(req);
+                          setMotivoRechazo('');
+                        }}
+                        className="py-1.5 px-2 bg-red-50 hover:bg-red-100 text-red-600 font-black text-[10px] rounded-lg border border-red-200 flex items-center justify-center gap-1 transition-all truncate"
+                        title="Rechazar y devolver al solicitante"
+                      >
+                        <X size={12} />
+                        <span>Rechazar</span>
+                      </button>
                     </div>
                   </div>
-
-                  {/* Acciones de Revisión Previa */}
-                  <div className="mt-2.5 pt-2 border-t border-gray-50 grid grid-cols-3 gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => setSolicitudAuditoria(req)}
-                      className="py-1.5 px-2 bg-brand-light hover:bg-brand-primary/10 text-brand-primary font-black text-[10px] rounded-lg flex items-center justify-center gap-1 transition-all truncate"
-                      title="Ver todos los comprobantes y fotos"
-                    >
-                      <Eye size={12} />
-                      <span>Revisar</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setModalPostergar(req);
-                        setMotivoPostergacion('');
-                      }}
-                      className="py-1.5 px-2 bg-amber-50 hover:bg-amber-100 text-amber-700 font-black text-[10px] rounded-lg border border-amber-200 flex items-center justify-center gap-1 transition-all truncate"
-                      title="Mover o postergar para el próximo cierre"
-                    >
-                      <RotateCcw size={12} />
-                      <span>Postergar</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setModalRechazo(req);
-                        setMotivoRechazo('');
-                      }}
-                      className="py-1.5 px-2 bg-red-50 hover:bg-red-100 text-red-600 font-black text-[10px] rounded-lg border border-red-200 flex items-center justify-center gap-1 transition-all truncate"
-                      title="Rechazar y devolver al solicitante"
-                    >
-                      <X size={12} />
-                      <span>Rechazar</span>
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+                );
+              })}
+            </div>
+          </>
         ) : (
           <div className="bg-white rounded-2xl p-8 border-2 border-dashed border-gray-200 text-center flex flex-col items-center justify-center space-y-2.5">
             <div className="w-12 h-12 rounded-xl bg-emerald-50 flex items-center justify-center text-emerald-600">
@@ -629,16 +1102,18 @@ const Aprobaciones = () => {
             </div>
             <h3 className="text-sm font-black text-brand-dark">Sin rendiciones pendientes de revisión</h3>
             <p className="text-xs text-gray-400 max-w-sm">
-              {busqueda
-                ? 'No se encontraron solicitudes con los términos de búsqueda.'
+              {busqueda || filtroRevision !== 'TODOS'
+                ? 'No se encontraron solicitudes con los filtros aplicados.'
                 : 'Todas las rendiciones liquidadas están listas para el Cierre Semanal de Caja.'}
             </p>
-            <button
-              onClick={() => navigate('/cierre-caja')}
-              className="mt-1 px-4 py-2 rounded-xl bg-emerald-600 text-white text-xs font-black shadow-md shadow-emerald-500/20 hover:bg-emerald-700 transition-all"
-            >
-              Ir a Cierre de Caja
-            </button>
+            {puedeAccederCierreCaja(user) && (
+              <button
+                onClick={() => navigate('/cierre-caja')}
+                className="mt-1 px-4 py-2 rounded-xl bg-emerald-600 text-white text-xs font-black shadow-md shadow-emerald-500/20 hover:bg-emerald-700 transition-all"
+              >
+                Ir a Cierre de Caja
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -672,13 +1147,44 @@ const Aprobaciones = () => {
                 </div>
                 <h3 className="text-sm font-black text-brand-dark">Revisión de Gastos y Comprobantes</h3>
               </div>
-              <button
-                type="button"
-                onClick={() => setSolicitudAuditoria(null)}
-                className="p-1.5 rounded-xl text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
-              >
-                <X size={18} />
-              </button>
+
+              <div className="flex items-center gap-2">
+                {esGerente && (
+                  <button
+                    type="button"
+                    onClick={(e) => handleToggleRevision(solicitudAuditoria, e)}
+                    disabled={conmutandoId === solicitudAuditoria.id || conmutandoMasivo}
+                    className={`flex items-center gap-1.5 px-3 py-1 rounded-xl border font-black text-xs transition-all shadow-xs active:scale-95 ${
+                      Boolean(solicitudAuditoria.revisado || solicitudAuditoria.revision)
+                        ? 'bg-emerald-500 hover:bg-emerald-600 text-white border-emerald-600'
+                        : 'bg-gray-50 hover:bg-emerald-50 text-gray-600 hover:text-emerald-700 border-gray-200'
+                    }`}
+                    title="Conmutar estado de revisión gerencial"
+                  >
+                    {conmutandoId === solicitudAuditoria.id ? (
+                      <RefreshCw size={13} className="animate-spin text-current" />
+                    ) : Boolean(solicitudAuditoria.revisado || solicitudAuditoria.revision) ? (
+                      <>
+                        <CheckCircle2 size={14} />
+                        <span>Revisado</span>
+                      </>
+                    ) : (
+                      <>
+                        <Clock size={14} />
+                        <span>Marcar Revisado</span>
+                      </>
+                    )}
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => setSolicitudAuditoria(null)}
+                  className="p-1.5 rounded-xl text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
+                >
+                  <X size={18} />
+                </button>
+              </div>
             </div>
 
             <div className="p-4 overflow-y-auto space-y-3">
@@ -715,6 +1221,7 @@ const Aprobaciones = () => {
                     ? det.subgasto_id.nombre
                     : 'Comprobante de Gasto';
                   const tipoGasto = det.subgasto_id?.tipogasto_id?.nombre || null;
+                  const { ruta } = resolverRutaOEntidad(det, entidades);
 
                   return (
                     <div
@@ -755,6 +1262,12 @@ const Aprobaciones = () => {
                               </span>
                             )}
                             <h4 className="text-xs font-black text-brand-dark leading-snug">{nombreGasto}</h4>
+                            {ruta && (
+                              <div className="flex items-center gap-1.5 text-[11px] font-bold text-blue-700 bg-blue-50/80 border border-blue-200/60 px-2 py-0.5 rounded-md mt-1 w-fit">
+                                <MapPin size={12} className="text-blue-600 shrink-0" />
+                                <span>{ruta}</span>
+                              </div>
+                            )}
                             <p className="text-[11px] text-gray-500 mt-0.5">{det.detalle || 'Sin descripción'}</p>
                           </div>
                         </div>
@@ -782,7 +1295,11 @@ const Aprobaciones = () => {
                           {det.lima_provincia === 'L' ? 'Lima' : 'Provincia'}
                         </span>
                         {det.nro_factura && <span className="px-2 py-0.5 bg-gray-50 rounded-md">Doc: {det.nro_factura}</span>}
-                        {det.nro_ruc && <span className="px-2 py-0.5 bg-gray-50 rounded-md">RUC: {det.nro_ruc}</span>}
+                        {det.nro_ruc && (
+                          <span className="px-2 py-0.5 bg-gray-50 rounded-md">
+                            RUC: {det.nro_ruc}{det.razon_social ? ` • ${det.razon_social}` : ''}
+                          </span>
+                        )}
                         {(det.placa_nombre || det.placa) && <span className="px-2 py-0.5 bg-amber-50 text-amber-700 rounded-md">Placa: {det.placa_nombre || det.placa}</span>}
                       </div>
                     </div>

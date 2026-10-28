@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard,
@@ -14,6 +14,7 @@ import {
   CreditCard
 } from 'lucide-react';
 import { useUserStore } from '../store/userStore';
+import { puedeAccederRuta } from '../utils/permisos';
 
 /**
  * Sidebar Responsivo Premium con diseño colapsable y estados de alta fidelidad.
@@ -32,43 +33,38 @@ const Sidebar = () => {
       title: 'Panel General',
       icon: LayoutDashboard,
       path: '/dashboard',
-      roles: ['gerente', 'jefe', 'coordinador', 'usuario']
     },
     {
       title: 'Nueva Solicitud',
       icon: PlusCircle,
       path: '/nueva-solicitud',
-      roles: ['usuario', 'gerente']
     },
     {
       title: 'Mis Solicitudes',
       icon: FileText,
       path: '/mis-solicitudes',
-      roles: ['usuario', 'gerente', 'jefe', 'coordinador']
     },
     {
       title: 'Aprobaciones',
       icon: FileCheck,
       path: '/aprobaciones',
-      roles: ['gerente', 'jefe', 'coordinador']
     },
     {
       title: 'Cierre de Caja',
       icon: History,
       path: '/cierre-caja',
-      roles: ['gerente']
     },
     {
       title: 'Balance Semanal',
       icon: PieChart,
       path: '/balance',
-      roles: ['gerente']
     },
   ];
 
-  // Filtrar por rol (Simulación básica)
-  const filteredItems = menuItems;
-  // En producción: menuItems.filter(item => item.roles.includes(user?.rol));
+  // Filtrar estrictamente por permisos del usuario (Gerencia de Operaciones / Finanzas / Superusuario)
+  const filteredItems = useMemo(() => {
+    return menuItems.filter((item) => puedeAccederRuta(item.path, user));
+  }, [user]);
 
   const SidebarContent = () => (
     <div className="flex flex-col h-full bg-brand-dark text-white relative">

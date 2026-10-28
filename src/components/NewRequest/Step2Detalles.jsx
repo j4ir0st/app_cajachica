@@ -1,4 +1,5 @@
 import React, { useState, useRef, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Plus,
   Trash2,
@@ -19,7 +20,8 @@ import {
   Edit2,
   X,
   Upload,
-  Eye
+  Eye,
+  Loader2
 } from 'lucide-react';
 import { useUserStore } from '../../store/userStore';
 import { useCatalogoStore } from '../../store/catalogoStore';
@@ -29,6 +31,7 @@ import { esArchivoPdf } from '../../utils/archivoUtil';
 import ModalVisorComprobante from '../ModalVisorComprobante';
 import Combobox from '../Combobox';
 import { formatearNombreEntidad, formatearSubtituloEntidad, esEntidadValidaEntrega } from '../../utils/entidades';
+import { filtrarSubgastosPorPerfil } from '../../utils/reglasAccesos';
 
 const API_URL = import.meta.env.DEV ? '' : (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
 
@@ -58,6 +61,7 @@ const obtenerDetalleVacio = () => ({
   empresa_id: null,
   nro_factura: '',
   nro_ruc: '',
+  razon_social: '',
   placa_id: null,
   placa: '',
   placa_nombre: '',
@@ -71,43 +75,9 @@ const obtenerDetalleVacio = () => ({
 });
 
 // ============================================================================
-// FUNCIONES DE REGLAS DE NEGOCIO Y VISIBILIDAD POR ROL
+// REGLAS DE ACCESOS Y VISIBILIDAD POR ÁREA Y PUESTO
+// Implementadas en ../../utils/reglasAccesos.js según "ACCESOS OPCIONES CAJA CHICA.xlsx"
 // ============================================================================
-
-/**
- * Determina si el puesto del usuario corresponde a Jefatura o Gestión.
- */
-const esRolGestion = (puesto, user = null) => {
-  if (user?.is_superuser || user?.is_staff) return true;
-  const p = (puesto || '').toLowerCase();
-  return ['gerente', 'jefe', 'coordinador', 'supervisor', 'planner'].some((rol) => p.includes(rol));
-};
-
-/**
- * Determina si el puesto del usuario corresponde a Personal Operativo.
- */
-const esRolOperativo = (puesto) => {
-  const p = (puesto || '').toLowerCase();
-  return ['auxiliar', 'chofer', 'motorizado', 'conductor'].some((rol) => p.includes(rol));
-};
-
-/**
- * Filtra los subgastos según el puesto del usuario:
- * - Jefatura/Gestión/Superusuario: Visualiza todos los subgastos.
- * - Operativo: Visualiza únicamente los marcados con visible_para_operativo === true.
- * - Administrativo/Otros: Visualiza únicamente los marcados con visible_para_operativo === false.
- */
-const filtrarSubgastosPorPuesto = (subgastos, puesto, user = null) => {
-  if (!Array.isArray(subgastos) || subgastos.length === 0) return [];
-  if (user?.is_superuser || user?.is_staff) return subgastos;
-  if (!puesto || esRolGestion(puesto, user)) return subgastos;
-  if (esRolOperativo(puesto)) {
-    const operativos = subgastos.filter((s) => s.visible_para_operativo === true);
-    return operativos.length > 0 ? operativos : subgastos;
-  }
-  const administrativos = subgastos.filter((s) => !s.visible_para_operativo);
-  return administrativos.length > 0 ? administrativos : subgastos;
-};
 
 /**
  * Extrae un ID numérico de una URL o valor.
@@ -135,6 +105,84 @@ const coincidenUrlsOIds = (url1, url2) => {
   return id1 !== null && id2 !== null && id1 === id2;
 };
 
+/**
+ * Normaliza cadenas de texto para comparaciones seguras de nombres (sin acentos, minúsculas, sin espacios extra).
+ */
+const normalizarTexto = (texto) => {
+  return String(texto || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim();
+};
+
+/**
+ * Determina si una unidad de transporte corresponde a una Minivan según el chofer o la placa.
+ */
+const esPlacaMinivan = (placaItem) => {
+  if (!placaItem) return false;
+  const textoChofer = normalizarTexto(placaItem.chofer).replace(/[-\s]/g, '');
+  const textoPlaca = normalizarTexto(placaItem.placa).replace(/[-\s]/g, '');
+  return textoChofer.includes('minivan') || textoPlaca.includes('minivan');
+};
+
+/**
+ * Determina si el registro de la placa corresponde al chofer del usuario en sesión.
+ */
+const esChoferDelUsuario = (placaItem, user) => {
+  if (!placaItem || !user) return false;
+
+  // 1. Verificación por ID si está disponible
+  if (placaItem.chofer_id && String(placaItem.chofer_id) === String(user.id)) return true;
+  if (typeof placaItem.chofer === 'number' && String(placaItem.chofer) === String(user.id)) return true;
+  if (typeof placaItem.chofer === 'object' && placaItem.chofer?.id && String(placaItem.chofer.id) === String(user.id)) return true;
+
+  const textoChofer = normalizarTexto(
+    typeof placaItem.chofer === 'object'
+      ? (placaItem.chofer?.full_name || placaItem.chofer?.nombre || `${placaItem.chofer?.first_name || ''} ${placaItem.chofer?.last_name || ''}`)
+      : placaItem.chofer
+  );
+
+  // Si no hay texto o es explícitamente "minivan", no es chofer personal
+  if (!textoChofer || textoChofer.replace(/[-\s]/g, '').includes('minivan')) return false;
+
+  // 2. Candidatos de nombres del usuario autenticado
+  const candidatosUsuario = [
+    normalizarTexto(user.username),
+    normalizarTexto(user.full_name),
+    normalizarTexto(user.nombre),
+    normalizarTexto(`${user.first_name || ''} ${user.last_name || ''}`),
+    normalizarTexto(`${user.last_name || ''} ${user.first_name || ''}`),
+    user.email ? normalizarTexto(user.email.split('@')[0]) : null,
+  ].filter(Boolean);
+
+  // Coincidencia exacta
+  if (candidatosUsuario.some((cand) => cand === textoChofer)) return true;
+
+  // Coincidencia por username si tiene longitud suficiente
+  if (user.username && user.username.length >= 3 && textoChofer.includes(normalizarTexto(user.username))) {
+    return true;
+  }
+
+  // Coincidencia por palabras completas (ej: "JUAN PEREZ" coincidiendo con "JUAN CARLOS PEREZ GOMEZ")
+  const tokensChofer = textoChofer.split(/\s+/).filter((t) => t.length >= 3);
+  if (tokensChofer.length >= 2) {
+    for (const cand of candidatosUsuario) {
+      if (tokensChofer.every((tok) => cand.includes(tok))) return true;
+    }
+  }
+
+  const tokensUsuario = [
+    normalizarTexto(user.first_name),
+    normalizarTexto(user.last_name),
+  ].filter((t) => t && t.length >= 3);
+  if (tokensUsuario.length >= 2) {
+    if (tokensUsuario.every((tok) => textoChofer.includes(tok))) return true;
+  }
+
+  return false;
+};
+
 // ============================================================================
 // COMPONENTE PRINCIPAL: STEP 2 DETALLES
 // ============================================================================
@@ -156,6 +204,9 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
   const [editandoIdx, setEditandoIdx] = useState(null);
   const [errorLocal, setErrorLocal] = useState('');
   const [archivoVisor, setArchivoVisor] = useState(null);
+  const [consultandoRuc, setConsultandoRuc] = useState(false);
+  const [mensajeRuc, setMensajeRuc] = useState(null);
+  const [mostrarCampoManualRazonSocial, setMostrarCampoManualRazonSocial] = useState(false);
 
   const referenciaCamara = useRef(null);
   const referenciaArchivo = useRef(null);
@@ -167,10 +218,10 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
     }
   }, [tiposGasto, subgastos, cargarCatalogos]);
 
-  // Subgastos visibles según el rol del usuario (con fallback seguro)
+  // Subgastos visibles según la matriz de accesos por Área y Puesto (ACCESOS OPCIONES CAJA CHICA.xlsx)
   const subgastosDisponibles = useMemo(() => {
-    return filtrarSubgastosPorPuesto(subgastos, user?.puesto, user);
-  }, [subgastos, user]);
+    return filtrarSubgastosPorPerfil(subgastos, user, tiposGasto);
+  }, [subgastos, user, tiposGasto]);
 
   // Tipos de gasto disponibles (vinculados a los subgastos o catálogo completo)
   const tiposGastoDisponibles = useMemo(() => {
@@ -253,15 +304,44 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
       }));
   }, [entidades]);
 
+  // Determinar si el usuario en sesión está registrado como chofer en rc_placas
+  const placaDelUsuario = useMemo(() => {
+    if (!user || !Array.isArray(placas) || placas.length === 0) return null;
+    return placas.find((p) => esChoferDelUsuario(p, user)) || null;
+  }, [placas, user]);
+
+  // Opciones de placas: Si el usuario = chofer se incluye su placa; si no, solo las que tienen chofer = minivan
   const opcionesPlacas = useMemo(() => {
-    return (placas || []).map((p) => ({
+    if (!Array.isArray(placas) || placas.length === 0) return [];
+
+    let lista = [];
+    if (placaDelUsuario) {
+      const minivans = placas.filter((p) => p.id !== placaDelUsuario.id && esPlacaMinivan(p));
+      lista = [placaDelUsuario, ...minivans];
+    } else {
+      lista = placas.filter(esPlacaMinivan);
+      // Fallback si no hay registros clasificados como minivan para no bloquear el formulario
+      if (lista.length === 0) {
+        lista = placas;
+      }
+    }
+
+    // Si se está editando un registro existente, asegurar que la placa previa esté presente en las opciones
+    if (formulario.placa_id && !lista.some((p) => p.id === formulario.placa_id || String(p.id) === String(formulario.placa_id))) {
+      const previa = placas.find((p) => p.id === formulario.placa_id || String(p.id) === String(formulario.placa_id));
+      if (previa) {
+        lista = [previa, ...lista];
+      }
+    }
+
+    return lista.map((p) => ({
       value: p.id,
       label: p.placa || `Placa #${p.id}`,
       sublabel: p.chofer ? `Chofer: ${p.chofer}` : '',
       busquedaExtra: `${p.placa || ''} ${p.chofer || ''}`,
       raw: p,
     }));
-  }, [placas]);
+  }, [placas, placaDelUsuario, formulario.placa_id]);
 
   // ============================================================================
   // MANEJADORES DE CAMBIO Y REGLAS REACTIVAS DEL FORMULARIO
@@ -338,9 +418,17 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
       provincia_url: zonaCalculada === 'L' ? null : prev.provincia_url,
       origen_url: subEncontrado.requiere_origen_destino || subEncontrado.requiere_entidad ? prev.origen_url : null,
       destino_url: subEncontrado.requiere_origen_destino ? prev.destino_url : null,
-      placa_id: subEncontrado.requiere_placa ? prev.placa_id : null,
-      placa: subEncontrado.requiere_placa ? prev.placa : '',
-      placa_nombre: subEncontrado.requiere_placa ? prev.placa_nombre : '',
+      placa_id: subEncontrado.requiere_placa
+        ? (placaDelUsuario ? placaDelUsuario.id : prev.placa_id)
+        : null,
+      placa: subEncontrado.requiere_placa
+        ? (placaDelUsuario ? (placaDelUsuario.placa || '') : prev.placa)
+        : '',
+      placa_nombre: subEncontrado.requiere_placa
+        ? (placaDelUsuario
+            ? (placaDelUsuario.chofer ? `${placaDelUsuario.placa} - ${placaDelUsuario.chofer}` : placaDelUsuario.placa)
+            : prev.placa_nombre)
+        : '',
       nro_ruc: subEncontrado.requiere_comprobante ? prev.nro_ruc : '',
       nro_factura: subEncontrado.requiere_comprobante ? prev.nro_factura : '',
     }));
@@ -359,6 +447,91 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
       _esPdf: esPdf,
     }));
   };
+
+  // Consulta automática de RUC en openruc.com (solo soporta RUC 20)
+  const consultarRucOpenRuc = async (ruc) => {
+    const rucLimpio = String(ruc || '').trim();
+    if (rucLimpio.length !== 11) return;
+
+    // RUC 10: Persona Natural (OpenRUC responde 404 out_of_scope)
+    if (rucLimpio.startsWith('10')) {
+      setMensajeRuc({
+        tipo: 'advertencia',
+        texto: 'OpenRUC solo consulta RUC 20 (Personas Jurídicas). Por favor, ingrese la razón social o nombre manualmente.',
+      });
+      setMostrarCampoManualRazonSocial(true);
+      return;
+    }
+
+    // RUC 20: Persona Jurídica
+    if (rucLimpio.startsWith('20')) {
+      setConsultandoRuc(true);
+      setMensajeRuc(null);
+      try {
+        const respuesta = await fetch(`https://openruc.com/api/ruc/${rucLimpio}`);
+        if (respuesta.ok) {
+          const datos = await respuesta.json();
+          if (datos && datos.razon_social) {
+            const rz = String(datos.razon_social).trim();
+            setFormulario((prev) => ({
+              ...prev,
+              razon_social: rz,
+            }));
+            setMensajeRuc({
+              tipo: 'exito',
+              texto: rz,
+            });
+            setMostrarCampoManualRazonSocial(false);
+          } else {
+            setMensajeRuc({
+              tipo: 'error',
+              texto: 'No se obtuvo razón social de SUNAT. Ingrésela manualmente.',
+            });
+            setMostrarCampoManualRazonSocial(true);
+          }
+        } else {
+          setMensajeRuc({
+            tipo: 'error',
+            texto: 'No se encontró información para este RUC en OpenRUC. Ingrese la razón social manualmente.',
+          });
+          setMostrarCampoManualRazonSocial(true);
+        }
+      } catch (err) {
+        console.warn('[OpenRUC] Error en consulta:', err);
+        setMensajeRuc({
+          tipo: 'error',
+          texto: 'Error al consultar OpenRUC. Ingrese la razón social manualmente.',
+        });
+        setMostrarCampoManualRazonSocial(true);
+      } finally {
+        setConsultandoRuc(false);
+      }
+      return;
+    }
+
+    // Prefijos distintos de 10 o 20
+    setMensajeRuc({
+      tipo: 'advertencia',
+      texto: 'RUC no estándar para consulta automática. Ingrese la razón social manualmente.',
+    });
+    setMostrarCampoManualRazonSocial(true);
+  };
+
+  // Auto-selección automática de placa si el subgasto exige placa y el usuario = chofer
+  React.useEffect(() => {
+    if (modalAbierto && subgastoActivo?.requiere_placa && placaDelUsuario) {
+      if (!formulario.placa_id) {
+        setFormulario((prev) => ({
+          ...prev,
+          placa_id: placaDelUsuario.id,
+          placa: placaDelUsuario.placa || '',
+          placa_nombre: placaDelUsuario.chofer
+            ? `${placaDelUsuario.placa} - ${placaDelUsuario.chofer}`
+            : placaDelUsuario.placa,
+        }));
+      }
+    }
+  }, [modalAbierto, subgastoActivo?.requiere_placa, placaDelUsuario, formulario.placa_id]);
 
   // ============================================================================
   // VALIDACIONES INMEDIATAS DEL FRONTEND
@@ -397,6 +570,11 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
       if (subgastoActivo.requiere_comprobante) {
         if (!formulario.nro_ruc || formulario.nro_ruc.trim().length !== 11) {
           setErrorLocal('El RUC es obligatorio y debe contener exactamente 11 dígitos numéricos.');
+          return false;
+        }
+        if (!formulario.razon_social || formulario.razon_social.trim() === '') {
+          setMostrarCampoManualRazonSocial(true);
+          setErrorLocal('Debe ingresar la razón social o nombre de la empresa emisora.');
           return false;
         }
         if (!formulario.nro_factura || formulario.nro_factura.trim() === '') {
@@ -469,10 +647,21 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
     if (referenciaArchivo.current) {
       referenciaArchivo.current.value = '';
     }
-    setFormulario(obtenerDetalleVacio());
+    const nuevo = obtenerDetalleVacio();
+    if (placaDelUsuario) {
+      nuevo.placa_id = placaDelUsuario.id;
+      nuevo.placa = placaDelUsuario.placa || '';
+      nuevo.placa_nombre = placaDelUsuario.chofer
+        ? `${placaDelUsuario.placa} - ${placaDelUsuario.chofer}`
+        : placaDelUsuario.placa;
+    }
+    setFormulario(nuevo);
     setEditandoIdx(null);
     setPasoWizard(1);
     setErrorLocal('');
+    setConsultandoRuc(false);
+    setMensajeRuc(null);
+    setMostrarCampoManualRazonSocial(false);
     setModalAbierto(true);
   };
 
@@ -517,6 +706,7 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
 
     setFormulario({
       ...item,
+      razon_social: item.razon_social || '',
       placa_id: placaId || null,
       placa: placaTexto,
       placa_nombre: placaNombre,
@@ -527,6 +717,9 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
     setEditandoIdx(idx);
     setPasoWizard(1);
     setErrorLocal('');
+    setConsultandoRuc(false);
+    setMensajeRuc(null);
+    setMostrarCampoManualRazonSocial(!item.razon_social && !!item.nro_ruc);
     setModalAbierto(true);
   };
 
@@ -541,6 +734,9 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
     setFormulario(obtenerDetalleVacio());
     setEditandoIdx(null);
     setErrorLocal('');
+    setConsultandoRuc(false);
+    setMensajeRuc(null);
+    setMostrarCampoManualRazonSocial(false);
   };
 
   const guardarLineaGasto = () => {
@@ -762,7 +958,7 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
 
                   {det.nro_ruc && (
                     <span className="px-2 py-0.5 bg-gray-50 text-gray-600 rounded-md font-semibold">
-                      RUC: {det.nro_ruc}
+                      RUC: {det.nro_ruc}{det.razon_social ? ` • ${det.razon_social}` : ''}
                     </span>
                   )}
 
@@ -825,8 +1021,8 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
       {/* ========================================================================
           MODAL ASISTENTE GUIADO (SUB-WIZARD MÓVIL)
          ======================================================================== */}
-      {modalAbierto && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-brand-dark/70 backdrop-blur-sm p-3 sm:p-4 overflow-y-auto">
+      {modalAbierto && createPortal(
+        <div className="fixed inset-0 !m-0 z-[100] flex items-center justify-center bg-brand-dark/70 backdrop-blur-sm p-3 sm:p-4 overflow-y-auto">
           <div className="bg-white rounded-3xl w-full max-w-lg shadow-2xl border border-gray-100 flex flex-col max-h-[92vh] overflow-hidden animate-scale-up">
             {/* Cabecera del Modal */}
             <div className="px-5 py-4 bg-white border-b border-gray-100 flex items-center justify-between shrink-0">
@@ -1080,16 +1276,90 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
                       </div>
 
                       <div>
-                        <label className="block text-xs font-bold text-gray-500 mb-1 uppercase tracking-wider">N° RUC *</label>
+                        <div className="flex items-center justify-between mb-1">
+                          <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider">
+                            N° RUC *
+                          </label>
+                          {consultandoRuc && (
+                            <span className="text-[10px] text-brand-primary font-bold flex items-center gap-1 animate-pulse">
+                              <Loader2 size={11} className="animate-spin" /> Consultando SUNAT...
+                            </span>
+                          )}
+                        </div>
+
                         <input
                           type="text"
                           maxLength={11}
-                          placeholder="20XXXXXXXXX (11 dígitos)"
+                          placeholder="20XXXXXXXXX o 10XXXXXXXXX"
                           value={formulario.nro_ruc}
-                          onChange={(e) => manejarCambio('nro_ruc', e.target.value.replace(/\D/g, ''))}
+                          onChange={(e) => {
+                            const val = e.target.value.replace(/\D/g, '');
+                            manejarCambio('nro_ruc', val);
+                            if (val.length === 11) {
+                              consultarRucOpenRuc(val);
+                            } else {
+                              setMensajeRuc(null);
+                            }
+                          }}
                           className="w-full bg-white border-2 border-gray-100 focus:border-brand-primary rounded-xl px-4 py-2.5 text-sm font-semibold text-brand-dark outline-none transition-colors"
                         />
+
+                        {/* Razón Social detectada en pequeño debajo del RUC */}
+                        {formulario.razon_social && !mostrarCampoManualRazonSocial && (
+                          <div className="mt-1.5 flex items-center justify-between text-xs text-emerald-800 bg-emerald-50/90 border border-emerald-200 rounded-xl px-3 py-1.5 animate-fade-in">
+                            <div className="flex items-center gap-1.5 min-w-0">
+                              <Building size={13} className="text-emerald-600 shrink-0" />
+                              <span className="font-bold text-[11px] truncate uppercase tracking-tight">
+                                {formulario.razon_social}
+                              </span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => setMostrarCampoManualRazonSocial(true)}
+                              className="text-[10px] text-brand-primary hover:underline ml-2 font-bold shrink-0"
+                            >
+                              Editar
+                            </button>
+                          </div>
+                        )}
+
+                        {/* Mensaje de aviso de OpenRUC (ej: RUC 10 o error 404) */}
+                        {mensajeRuc && mensajeRuc.tipo !== 'exito' && (
+                          <p className={`text-[10px] sm:text-[11px] font-medium mt-1 leading-tight ${
+                            mensajeRuc.tipo === 'advertencia' ? 'text-amber-700' : 'text-red-500'
+                          }`}>
+                            ⚠️ {mensajeRuc.texto}
+                          </p>
+                        )}
                       </div>
+
+                      {/* Campo Manual para Razón Social (si no se obtiene automáticamente, es RUC 10 o el usuario desea editarlo) */}
+                      {(mostrarCampoManualRazonSocial || (!formulario.razon_social && formulario.nro_ruc?.length === 11)) && (
+                        <div className="animate-fade-in">
+                          <div className="flex items-center justify-between mb-1">
+                            <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider">
+                              Razón Social / Proveedor (Manual) *
+                            </label>
+                            {formulario.razon_social && (
+                              <button
+                                type="button"
+                                onClick={() => setMostrarCampoManualRazonSocial(false)}
+                                className="text-[10px] text-gray-400 hover:text-gray-600 font-bold"
+                              >
+                                Ocultar
+                              </button>
+                            )}
+                          </div>
+                          <input
+                            type="text"
+                            placeholder="Ingrese el nombre o razón social del proveedor..."
+                            value={formulario.razon_social}
+                            onChange={(e) => manejarCambio('razon_social', e.target.value.toUpperCase())}
+                            className="w-full bg-white border-2 border-amber-200 focus:border-brand-primary rounded-xl px-4 py-2 text-xs font-semibold text-brand-dark outline-none transition-colors"
+                          />
+                        </div>
+                      )}
+
                       <div>
                         <label className="block text-xs font-bold text-gray-500 mb-1 uppercase tracking-wider">N° Factura / Boleta *</label>
                         <input
@@ -1106,15 +1376,27 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
                   {/* Placa Vehicular */}
                   {subgastoActivo?.requiere_placa && (
                     <div className="bg-gray-50/80 p-4 rounded-2xl border border-gray-100 space-y-2">
-                      <label className="block text-xs font-black text-brand-dark uppercase tracking-wider flex items-center gap-1.5">
-                        <Car size={14} className="text-brand-primary" />
-                        Placa / Unidad de Transporte *
-                      </label>
+                      <div className="flex items-center justify-between">
+                        <label className="block text-xs font-black text-brand-dark uppercase tracking-wider flex items-center gap-1.5">
+                          <Car size={14} className="text-brand-primary" />
+                          Placa / Unidad de Transporte *
+                        </label>
+                        {placaDelUsuario && formulario.placa_id === placaDelUsuario.id && (
+                          <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md">
+                            Asignada a su usuario
+                          </span>
+                        )}
+                        {!placaDelUsuario && (
+                          <span className="text-[10px] font-bold text-blue-700 bg-blue-50 border border-blue-200 px-2 py-0.5 rounded-md">
+                            Unidades Minivan
+                          </span>
+                        )}
+                      </div>
                       <Combobox
                         options={opcionesPlacas}
                         value={formulario.placa_id}
                         onChange={(val, opt) => seleccionarPlaca(val, opt)}
-                        placeholder="Buscar placa o chofer..."
+                        placeholder={placaDelUsuario ? "Placa asignada..." : "Buscar o seleccionar minivan..."}
                         icon={<Car size={14} className="text-brand-primary" />}
                         minParaBusqueda={6}
                       />
@@ -1381,7 +1663,8 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
               )}
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
       {/* Modal Visor Universal de Comprobante (Imágenes y PDFs) */}
       {archivoVisor && (

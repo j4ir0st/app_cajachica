@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { User, Lock, Eye, EyeOff, Loader2, ShieldCheck } from 'lucide-react';
 import axios from 'axios';
 import { useUserStore } from '../store/userStore';
+import { CLAVES_CATALOGO } from '../utils/catalogoCache';
 
 /**
  * Página de Login Ultra-Premium con diseño de alta fidelidad.
@@ -51,6 +52,7 @@ const Login = () => {
         email: rawUser.email,
         correo: rawUser.email,
         puesto: rawUser.puesto || 'Sin Puesto',
+        area: rawUser.area || 'Sin Área',
         area_id: rawUser.area_id || 'Sin Área',
         empresa: rawUser.empr_id || rawUser.empresa || rawUser.empresa_nombre || 'SURGICORP S.R.L.',
         empr_id: rawUser.empr_id || rawUser.empresa || rawUser.empresa_nombre || 'SURGICORP S.R.L.',
@@ -60,6 +62,11 @@ const Login = () => {
       };
 
       login(userData, access, refresh);
+      try {
+        localStorage.removeItem(CLAVES_CATALOGO.subgastos);
+      } catch (e) {
+        console.warn('No se pudo limpiar caché de subgastos:', e);
+      }
       navigate('/dashboard');
 
     } catch (error) {
