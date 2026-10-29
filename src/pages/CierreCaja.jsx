@@ -635,7 +635,15 @@ const CierreCaja = () => {
             {solicitudesFiltradas.map((req) => {
               const totalGast = parseFloat(req.total_gastado || req.monto_solicitado || 0);
               const nombreSolicitante = obtenerNombreSolicitante(req.usuario_id);
-              const numComprobantes = (req.detalle || req.detalles || []).length;
+              const listaDetalles = req.detalle || req.detalles || [];
+              const numComprobantes = listaDetalles.length;
+              const facturasTexto = Array.from(
+                new Set(
+                  listaDetalles
+                    .map((d) => (d.nro_factura ? String(d.nro_factura).trim() : ''))
+                    .filter((f) => f && f !== '-' && f !== '—' && f.toLowerCase() !== 'null' && f.toLowerCase() !== 'undefined')
+                )
+              ).join(', ');
               const tipoCajaInfo = obtenerTipoCaja(req);
 
               return (
@@ -672,7 +680,16 @@ const CierreCaja = () => {
                       </div>
                       <div className="flex items-center gap-2 text-[10px] text-gray-400 mt-0.5">
                         <span className="shrink-0">{req.fecha_solicitud ? req.fecha_solicitud.slice(0, 10) : '—'}</span>
-                        <span className="shrink-0">• {numComprobantes} doc(s)</span>
+                        {/* En celular sólo numComprobantes doc(s); en escritorio incluye la lista de facturas */}
+                        <span
+                          className="hidden md:inline-block shrink-0 max-w-[260px] lg:max-w-[450px] truncate"
+                          title={facturasTexto ? `${numComprobantes} doc(s): ${facturasTexto}` : `${numComprobantes} doc(s)`}
+                        >
+                          • {numComprobantes} doc(s){facturasTexto ? `: ${facturasTexto}` : ''}
+                        </span>
+                        <span className="md:hidden shrink-0">
+                          • {numComprobantes} doc(s)
+                        </span>
                         {req.obs && (
                           <span className="italic truncate max-w-[140px] sm:max-w-xs md:max-w-md hidden sm:inline text-gray-500">
                             "{req.obs}"
