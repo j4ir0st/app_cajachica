@@ -24,7 +24,7 @@ import { useUserStore } from '../store/userStore';
 import { useCatalogoStore } from '../store/catalogoStore';
 import { fetchAuth } from '../utils/fetchAuth';
 import { obtenerTipoCaja } from '../utils/tipoCaja';
-import { esArchivoPdf } from '../utils/archivoUtil';
+import { esArchivoPdf, subgastoExigeAdjunto } from '../utils/archivoUtil';
 import { resolverRutaOEntidad } from '../utils/entidades';
 import ModalVisorComprobante from '../components/ModalVisorComprobante';
 import Toast from '../components/Toast';
@@ -434,12 +434,18 @@ const MisSolicitudes = () => {
       return;
     }
 
-    const tieneComprobanteIncompleto = listaDetalles.some((d) => !d.adj_cajachica);
-    if (tieneComprobanteIncompleto) {
+    const comprobanteFaltante = listaDetalles.find(
+      (d) => subgastoExigeAdjunto(d) && !d.adj_cajachica
+    );
+    if (comprobanteFaltante) {
+      const nombreSub =
+        typeof comprobanteFaltante.subgasto_id === 'object' && comprobanteFaltante.subgasto_id?.nombre
+          ? comprobanteFaltante.subgasto_id.nombre
+          : (comprobanteFaltante.detalle || 'Gasto registrado');
       setNotificacion({
         tipo: 'error',
         titulo: 'Foto Obligatoria Faltante',
-        mensaje: 'Todos los comprobantes deben tener su foto o ticket adjunto para poder liquidar la solicitud.',
+        mensaje: `El gasto "${nombreSub}" requiere adjuntar su foto o comprobante para poder liquidar la solicitud.`,
       });
       return;
     }

@@ -27,7 +27,7 @@ import { useUserStore } from '../../store/userStore';
 import { useCatalogoStore } from '../../store/catalogoStore';
 import { fetchAuth } from '../../utils/fetchAuth';
 import { obtenerTipoCaja, LISTA_EMPRESAS, extraerIdEmpresa } from '../../utils/tipoCaja';
-import { esArchivoPdf } from '../../utils/archivoUtil';
+import { esArchivoPdf, subgastoExigeAdjunto } from '../../utils/archivoUtil';
 import ModalVisorComprobante from '../ModalVisorComprobante';
 import Combobox from '../Combobox';
 import { formatearNombreEntidad, formatearSubtituloEntidad, esEntidadValidaEntrega } from '../../utils/entidades';
@@ -868,8 +868,8 @@ return (
       AGREGAR DETALLE DE GASTO
     </button>
 
-    {/* Aviso si existen gastos registrados sin comprobante */}
-    {detalles.some((d) => !d.adj_cajachica && !d._preview) && (
+    {/* Aviso si existen gastos registrados que exigen comprobante pero no lo tienen */}
+    {detalles.some((d) => subgastoExigeAdjunto(d, subgastos) && !d.adj_cajachica && !d._preview) && (
       <div className="p-3 bg-amber-50 border border-amber-200/80 rounded-2xl flex items-start gap-2.5 text-xs text-amber-900">
         <AlertCircle size={16} className="text-amber-600 shrink-0 mt-0.5" />
         <p>
@@ -945,10 +945,17 @@ return (
               {/* Etiquetas de Información Específica */}
               <div className="flex flex-wrap gap-1.5 pt-2 border-t border-gray-50 text-[11px]">
                 {!det.adj_cajachica && !det._preview && (
-                  <span className="px-2 py-0.5 bg-amber-50 text-amber-700 border border-amber-200 rounded-md font-bold text-[10px] flex items-center gap-1">
-                    <AlertCircle size={11} className="text-amber-500" />
-                    Sin comprobante (Obligatorio para liquidar)
-                  </span>
+                  subgastoExigeAdjunto(det, subgastos) ? (
+                    <span className="px-2 py-0.5 bg-amber-50 text-amber-700 border border-amber-200 rounded-md font-bold text-[10px] flex items-center gap-1">
+                      <AlertCircle size={11} className="text-amber-500" />
+                      Sin comprobante (Obligatorio para liquidar)
+                    </span>
+                  ) : (
+                    <span className="px-2 py-0.5 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-md font-bold text-[10px] flex items-center gap-1">
+                      <CheckCircle2 size={11} className="text-emerald-500" />
+                      No requiere comprobante
+                    </span>
+                  )
                 )}
                 <span className="px-2 py-0.5 bg-gray-50 text-gray-600 rounded-md font-semibold flex items-center gap-1">
                   <MapPin size={11} className="text-brand-primary" />
@@ -1508,8 +1515,12 @@ return (
                   <div className="flex items-center justify-between mb-2">
                     <label className="text-xs font-black text-brand-dark uppercase tracking-wider flex items-center gap-1.5">
                       <Camera size={14} className="text-brand-primary" />
-                      Foto o Ticket del Comprobante *
-                      <span className="text-[10px] text-red-500 font-bold">(Obligatorio)</span>
+                      Foto o Ticket del Comprobante {subgastoExigeAdjunto(subgastoActivo) && '*'}
+                      {subgastoExigeAdjunto(subgastoActivo) ? (
+                        <span className="text-[10px] text-red-500 font-bold">(Obligatorio)</span>
+                      ) : (
+                        <span className="text-[10px] text-emerald-600 font-bold">(Opcional para este concepto)</span>
+                      )}
                     </label>
                     {(formulario.adj_cajachica || formulario._preview) && (
                       <span className="text-[10px] font-black text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full flex items-center gap-1 border border-emerald-200">
@@ -1536,11 +1547,26 @@ return (
                   />
 
                   {/* Aviso informativo de borrador vs liquidación */}
-                  <div className="mb-3 p-2.5 bg-amber-50/90 border border-amber-200/90 rounded-xl flex items-start gap-2 text-xs text-amber-900">
-                    <AlertCircle size={15} className="text-amber-600 shrink-0 mt-0.5" />
-                    <p className="text-[11px] leading-snug">
-                      <strong>Aviso:</strong> El comprobante es obligatorio al <strong>Liquidar</strong>. Si desea guardar este detalle como <strong>Borrador</strong>, puede registrarlo sin comprobante, pero recuerde que para liquidar se debe actualizar el registro con el adjunto correspondiente.
-                    </p>
+                  <div className={`mb-3 p-2.5 rounded-xl flex items-start gap-2 text-xs ${
+                    subgastoExigeAdjunto(subgastoActivo)
+                      ? 'bg-amber-50/90 border border-amber-200/90 text-amber-900'
+                      : 'bg-emerald-50/90 border border-emerald-200/90 text-emerald-900'
+                  }`}>
+                    {subgastoExigeAdjunto(subgastoActivo) ? (
+                      <>
+                        <AlertCircle size={15} className="text-amber-600 shrink-0 mt-0.5" />
+                        <p className="text-[11px] leading-snug">
+                          <strong>Aviso:</strong> El comprobante es obligatorio al <strong>Liquidar</strong>. Si desea guardar este detalle como <strong>Borrador</strong>, puede registrarlo sin comprobante, pero recuerde que para liquidar se debe actualizar el registro con el adjunto correspondiente.
+                        </p>
+                      </>
+                    ) : (
+                      <>
+                        <CheckCircle2 size={15} className="text-emerald-600 shrink-0 mt-0.5" />
+                        <p className="text-[11px] leading-snug">
+                          <strong>Concepto exento:</strong> Este subgasto no requiere adjuntar foto ni comprobante físico para poder ser liquidado.
+                        </p>
+                      </>
+                    )}
                   </div>
 
                   {formulario._preview || formulario.adj_cajachica ? (

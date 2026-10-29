@@ -143,6 +143,7 @@ const CierreCaja = () => {
         format: 'json',
         estado_requerimiento: 'LQ',
         revisado: 'true',
+        top: '100',
       });
 
       const res = await fetchAuth(`${API_URL}/Requerimiento_CajaChica/?${parametros.toString()}`);
@@ -239,6 +240,7 @@ const CierreCaja = () => {
             estado_requerimiento: 'LQ',
             revisado: 'true',
             search: termino,
+            top: '100',
           });
           const res = await fetchAuth(`${API_URL}/Requerimiento_CajaChica/?${params.toString()}`);
           if (res.ok) {

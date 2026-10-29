@@ -114,6 +114,7 @@ const Aprobaciones = () => {
   const [busqueda, setBusqueda] = useState('');
   const [buscandoRemoto, setBuscandoRemoto] = useState(false);
   const [filtroRevision, setFiltroRevision] = useState('PENDIENTES'); // 'PENDIENTES' | 'REVISADOS'
+  const [filtroTipoCaja, setFiltroTipoCaja] = useState(null); // null | 'A' | 'B' | 'C'
 
   // Estados de conmutación de revisión gerencial
   const [conmutandoId, setConmutandoId] = useState(null);
@@ -141,6 +142,7 @@ const Aprobaciones = () => {
       const parametros = new URLSearchParams({
         format: 'json',
         estado_requerimiento: 'LQ',
+        top: '100',
       });
 
       const res = await fetchAuth(`${API_URL}/Requerimiento_CajaChica/?${parametros.toString()}`);
@@ -316,8 +318,74 @@ const Aprobaciones = () => {
       }
     }
 
+    if (filtroTipoCaja) {
+      base = base.filter((req) => obtenerTipoCaja(req)?.tipo === filtroTipoCaja);
+    }
+
     return base;
+  }, [solicitudes, busqueda, esGerente, filtroRevision, filtroTipoCaja]);
+
+  // Conteo reactivo por tipo de caja (SURGICORP: A, RRMEDICAL: B, SIN FACTURA: C)
+  const conteoTiposCaja = useMemo(() => {
+    let base = solicitudes;
+
+    if (busqueda.trim()) {
+      const query = busqueda.toLowerCase().trim();
+      const querySinHash = query.replace(/^#/, '');
+      base = base.filter((req) => {
+        const idTexto = String(req.id || '').toLowerCase();
+        const solicitanteTexto = obtenerNombreSolicitante(req.usuario_id).toLowerCase();
+        const obsTexto = (req.obs || '').toLowerCase();
+        const areaTexto = String(req.area_id || '').toLowerCase();
+        const detallesTexto = (req.detalle || req.detalles || [])
+          .map((d) => `${d.detalle || ''} ${d.nro_factura || ''} ${d.nro_ruc || ''} ${d.placa_nombre || d.placa || ''} ${d.subgasto_id?.nombre || ''}`)
+          .join(' ')
+          .toLowerCase();
+
+        return (
+          idTexto === querySinHash ||
+          idTexto.includes(querySinHash) ||
+          idTexto.includes(query) ||
+          solicitanteTexto.includes(query) ||
+          obsTexto.includes(query) ||
+          areaTexto.includes(query) ||
+          detallesTexto.includes(query)
+        );
+      });
+    }
+
+    if (esGerente) {
+      if (filtroRevision === 'REVISADOS') {
+        base = base.filter((r) => Boolean(r.revisado || r.revision));
+      } else {
+        base = base.filter((r) => !Boolean(r.revisado || r.revision));
+      }
+    }
+
+    const c = {
+      A: { count: 0, monto: 0 },
+      B: { count: 0, monto: 0 },
+      C: { count: 0, monto: 0 },
+    };
+    for (const req of base) {
+      const t = obtenerTipoCaja(req)?.tipo;
+      const gasto = parseFloat(req.total_gastado || req.monto_solicitado || 0);
+      const monto = isNaN(gasto) ? 0 : gasto;
+      if (t && c[t]) {
+        c[t].count += 1;
+        c[t].monto += monto;
+      }
+    }
+    return c;
   }, [solicitudes, busqueda, esGerente, filtroRevision]);
+
+  // Identificador textual del tipo de caja actualmente filtrado
+  const etiquetaTipoCajaFiltro = useMemo(() => {
+    if (filtroTipoCaja === 'A') return 'Surgicorp';
+    if (filtroTipoCaja === 'B') return 'RR Medical';
+    if (filtroTipoCaja === 'C') return 'Sin Factura';
+    return '';
+  }, [filtroTipoCaja]);
 
   // Búsqueda Inteligente: En memoria primero; si no hay coincidencias o se busca por ID no cargado, consultar BD
   useEffect(() => {
@@ -352,6 +420,7 @@ const Aprobaciones = () => {
             format: 'json',
             estado_requerimiento: 'LQ',
             search: termino,
+            top: '100',
           });
           const res = await fetchAuth(`${API_URL}/Requerimiento_CajaChica/?${params.toString()}`);
           if (res.ok) {
@@ -381,12 +450,17 @@ const Aprobaciones = () => {
   // ============================================================================
 
   const metricasRevision = useMemo(() => {
-    const totalCount = solicitudes.length;
+    // Si hay un filtro por tipo de caja activo, calculamos los KPIs en base a dicho tipo
+    const base = filtroTipoCaja
+      ? solicitudes.filter((req) => obtenerTipoCaja(req)?.tipo === filtroTipoCaja)
+      : solicitudes;
+
+    const totalCount = base.length;
     let totalMonto = 0;
     let revisadosCount = 0;
     let revisadosMonto = 0;
 
-    for (const req of solicitudes) {
+    for (const req of base) {
       const gasto = parseFloat(req.total_gastado || req.monto_solicitado || 0);
       const montoValido = isNaN(gasto) ? 0 : gasto;
       totalMonto += montoValido;
@@ -410,18 +484,24 @@ const Aprobaciones = () => {
       faltantesMonto,
       porcentajeRevisado,
     };
-  }, [solicitudes]);
+  }, [solicitudes, filtroTipoCaja]);
 
   const totalMontoAuditoria = useMemo(() => {
-    return solicitudes.reduce((acc, req) => {
+    const base = filtroTipoCaja
+      ? solicitudes.filter((req) => obtenerTipoCaja(req)?.tipo === filtroTipoCaja)
+      : solicitudes;
+    return base.reduce((acc, req) => {
       const gasto = parseFloat(req.total_gastado || req.monto_solicitado || 0);
       return acc + (isNaN(gasto) ? 0 : gasto);
     }, 0);
-  }, [solicitudes]);
+  }, [solicitudes, filtroTipoCaja]);
 
   const totalComprobantes = useMemo(() => {
-    return solicitudes.reduce((acc, req) => acc + (req.detalle || req.detalles || []).length, 0);
-  }, [solicitudes]);
+    const base = filtroTipoCaja
+      ? solicitudes.filter((req) => obtenerTipoCaja(req)?.tipo === filtroTipoCaja)
+      : solicitudes;
+    return base.reduce((acc, req) => acc + (req.detalle || req.detalles || []).length, 0);
+  }, [solicitudes, filtroTipoCaja]);
 
   // ============================================================================
   // ACCIÓN: RECHAZAR / DEVOLVER SOLICITUD (RC)
@@ -651,8 +731,13 @@ const Aprobaciones = () => {
             {/* 1. Total por Revisar / Aprobar */}
             <div className="bg-brand-light/50 border border-gray-100 rounded-xl p-2.5 flex flex-col justify-between">
               <div className="flex items-center justify-between">
-                <span className="text-[10px] font-black uppercase tracking-wider text-gray-500">
-                  Total por Aprobar
+                <span className="text-[10px] font-black uppercase tracking-wider text-gray-500 flex items-center gap-1">
+                  <span>Total por Aprobar</span>
+                  {etiquetaTipoCajaFiltro && (
+                    <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-brand-primary/10 text-brand-primary normal-case">
+                      ({etiquetaTipoCajaFiltro})
+                    </span>
+                  )}
                 </span>
                 <span className="text-[10px] font-bold text-brand-primary bg-white px-2 py-0.5 rounded-md border border-gray-100">
                   {metricasRevision.totalCount} reg.
@@ -676,8 +761,13 @@ const Aprobaciones = () => {
               title="Filtrar rendiciones ya revisadas"
             >
               <div className="flex items-center justify-between">
-                <span className="text-[10px] font-black uppercase tracking-wider text-emerald-700">
-                  Revisados por Gerente
+                <span className="text-[10px] font-black uppercase tracking-wider text-emerald-700 flex items-center gap-1">
+                  <span>Revisados por Gerente</span>
+                  {etiquetaTipoCajaFiltro && (
+                    <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-emerald-200/70 text-emerald-800 normal-case">
+                      ({etiquetaTipoCajaFiltro})
+                    </span>
+                  )}
                 </span>
                 <span className="text-[10px] font-black text-emerald-700 bg-white px-2 py-0.5 rounded-md border border-emerald-200">
                   {metricasRevision.revisadosCount} ({metricasRevision.porcentajeRevisado}%)
@@ -701,8 +791,13 @@ const Aprobaciones = () => {
               title="Filtrar rendiciones pendientes de revisión"
             >
               <div className="flex items-center justify-between">
-                <span className="text-[10px] font-black uppercase tracking-wider text-amber-800">
-                  Falta Revisar
+                <span className="text-[10px] font-black uppercase tracking-wider text-amber-800 flex items-center gap-1">
+                  <span>Falta Revisar</span>
+                  {etiquetaTipoCajaFiltro && (
+                    <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-amber-200/70 text-amber-900 normal-case">
+                      ({etiquetaTipoCajaFiltro})
+                    </span>
+                  )}
                 </span>
                 <span className="text-[10px] font-black text-amber-800 bg-white px-2 py-0.5 rounded-md border border-amber-200">
                   {metricasRevision.faltantesCount} reg.
@@ -718,8 +813,13 @@ const Aprobaciones = () => {
             {/* 4. Avance y Acciones Rápidas Masivas */}
             <div className="bg-gray-50 border border-gray-100 rounded-xl p-2.5 flex flex-col justify-between">
               <div className="flex items-center justify-between">
-                <span className="text-[10px] font-black uppercase tracking-wider text-gray-500">
-                  Progreso Gerencial
+                <span className="text-[10px] font-black uppercase tracking-wider text-gray-500 flex items-center gap-1">
+                  <span>Progreso Gerencial</span>
+                  {etiquetaTipoCajaFiltro && (
+                    <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-gray-200 text-gray-700 normal-case">
+                      ({etiquetaTipoCajaFiltro})
+                    </span>
+                  )}
                 </span>
                 <span className="text-[10px] font-black text-brand-dark">
                   {metricasRevision.revisadosCount} / {metricasRevision.totalCount}
@@ -793,8 +893,8 @@ const Aprobaciones = () => {
       )}
 
       {/* Buscador de Solicitudes y Filtros de Estado */}
-      <div className="bg-white px-3 py-2 rounded-2xl border border-gray-100 shadow-sm shrink-0 flex flex-col sm:flex-row items-center gap-2">
-        <div className="relative flex-1 w-full">
+      <div className="bg-white px-3 py-2 rounded-2xl border border-gray-100 shadow-sm shrink-0 flex flex-wrap lg:flex-nowrap items-center gap-2">
+        <div className="relative flex-1 min-w-[200px] w-full">
           <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400" />
           <input
             type="text"
@@ -817,6 +917,81 @@ const Aprobaciones = () => {
               <X size={13} />
             </button>
           )}
+        </div>
+
+        {/* Botones de Filtro por Tipo de Caja (SURGICORP: Tipo A, RRMEDICAL: Tipo B, SIN FACTURA: Tipo C) */}
+        <div className="flex items-center gap-1.5 shrink-0 bg-brand-light/60 p-1 rounded-xl w-full sm:w-auto justify-center">
+          <button
+            type="button"
+            onClick={() => setFiltroTipoCaja((prev) => (prev === 'A' ? null : 'A'))}
+            className={`px-2.5 py-1.5 rounded-lg text-xs font-black uppercase tracking-wide border transition-all cursor-pointer shadow-2xs flex items-center gap-1.5 ${
+              filtroTipoCaja === 'A'
+                ? 'bg-red-600 text-white border-red-600 shadow-xs ring-2 ring-red-400/40'
+                : 'bg-red-50 text-red-600 border-red-200 hover:bg-red-100/80'
+            }`}
+            title={
+              filtroTipoCaja === 'A'
+                ? 'Quitar filtro Surgicorp (Tipo A)'
+                : `Filtrar Surgicorp: ${conteoTiposCaja.A.count} reg. • S/ ${conteoTiposCaja.A.monto.toFixed(2)}`
+            }
+          >
+            <span>SURGICORP</span>
+            <span
+              className={`text-[10px] px-1.5 py-0.2 rounded-md ${
+                filtroTipoCaja === 'A' ? 'bg-red-700 text-white' : 'bg-red-100/90 text-red-700 font-bold'
+              }`}
+            >
+              {conteoTiposCaja.A.count} • S/ {conteoTiposCaja.A.monto.toFixed(2)}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setFiltroTipoCaja((prev) => (prev === 'B' ? null : 'B'))}
+            className={`px-2.5 py-1.5 rounded-lg text-xs font-black uppercase tracking-wide border transition-all cursor-pointer shadow-2xs flex items-center gap-1.5 ${
+              filtroTipoCaja === 'B'
+                ? 'bg-blue-600 text-white border-blue-600 shadow-xs ring-2 ring-blue-400/40'
+                : 'bg-blue-50 text-blue-600 border-blue-200 hover:bg-blue-100/80'
+            }`}
+            title={
+              filtroTipoCaja === 'B'
+                ? 'Quitar filtro RR Medical (Tipo B)'
+                : `Filtrar RR Medical: ${conteoTiposCaja.B.count} reg. • S/ ${conteoTiposCaja.B.monto.toFixed(2)}`
+            }
+          >
+            <span>RRMEDICAL</span>
+            <span
+              className={`text-[10px] px-1.5 py-0.2 rounded-md ${
+                filtroTipoCaja === 'B' ? 'bg-blue-700 text-white' : 'bg-blue-100/90 text-blue-700 font-bold'
+              }`}
+            >
+              {conteoTiposCaja.B.count} • S/ {conteoTiposCaja.B.monto.toFixed(2)}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setFiltroTipoCaja((prev) => (prev === 'C' ? null : 'C'))}
+            className={`px-2.5 py-1.5 rounded-lg text-xs font-black uppercase tracking-wide border transition-all cursor-pointer shadow-2xs flex items-center gap-1.5 ${
+              filtroTipoCaja === 'C'
+                ? 'bg-amber-500 text-white border-amber-500 shadow-xs ring-2 ring-amber-400/40'
+                : 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100/80'
+            }`}
+            title={
+              filtroTipoCaja === 'C'
+                ? 'Quitar filtro Sin Factura (Tipo C)'
+                : `Filtrar Sin Factura: ${conteoTiposCaja.C.count} reg. • S/ ${conteoTiposCaja.C.monto.toFixed(2)}`
+            }
+          >
+            <span>SIN FACTURA</span>
+            <span
+              className={`text-[10px] px-1.5 py-0.2 rounded-md ${
+                filtroTipoCaja === 'C' ? 'bg-amber-600 text-white' : 'bg-amber-100/90 text-amber-800 font-bold'
+              }`}
+            >
+              {conteoTiposCaja.C.count} • S/ {conteoTiposCaja.C.monto.toFixed(2)}
+            </span>
+          </button>
         </div>
 
         {/* Pestañas de Filtro de Revisión (Exclusivo Gerente de Operaciones: Falta revisar / Revisados) */}
@@ -1194,6 +1369,32 @@ const Aprobaciones = () => {
                   </div>
                 );
               })}
+            </div>
+
+            {/* Barra Resumen de Totales al final de la lista */}
+            <div className="mt-3 p-3 bg-white rounded-2xl border border-gray-100 shadow-xs flex flex-col sm:flex-row items-center justify-between gap-2.5">
+              <div className="flex items-center gap-2 text-xs">
+                <span className="font-bold text-gray-500">Total en lista:</span>
+                <span className="font-black text-brand-dark bg-brand-light px-2.5 py-0.5 rounded-lg border border-gray-200">
+                  {solicitudesFiltradas.length} rendición(es)
+                </span>
+                {etiquetaTipoCajaFiltro && (
+                  <span className="text-[11px] font-bold px-2 py-0.5 rounded-md bg-gray-100 text-gray-700">
+                    Filtro: {etiquetaTipoCajaFiltro}
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] font-black uppercase tracking-wider text-gray-400">
+                  Monto Total Filtrado:
+                </span>
+                <span className="text-base sm:text-lg font-black text-brand-primary">
+                  S/{' '}
+                  {solicitudesFiltradas
+                    .reduce((acc, r) => acc + (parseFloat(r.total_gastado || r.monto_solicitado || 0) || 0), 0)
+                    .toFixed(2)}
+                </span>
+              </div>
             </div>
           </>
         ) : (

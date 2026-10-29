@@ -9,6 +9,7 @@ import Step2Detalles from '../components/NewRequest/Step2Detalles';
 import Step3Resumen from '../components/NewRequest/Step3Resumen';
 import Toast from '../components/Toast';
 import { extraerIdEmpresa } from '../utils/tipoCaja';
+import { subgastoExigeAdjunto } from '../utils/archivoUtil';
 
 const API_URL = import.meta.env.DEV ? '' : (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
 
@@ -281,8 +282,9 @@ const validarParaLiquidacion = (cabecera, detalles, montoFinal, totalGastos) => 
       return `El gasto #${nro} está marcado para Provincia pero no tiene provincia seleccionada.`;
     }
 
-    if (!d.adj_cajachica) {
-      return `El comprobante #${nro} (${d.detalle || 'Gasto'}) no tiene adjunto el comprobante o foto obligatoria. Para liquidar debe actualizar el registro con el adjunto correspondiente.`;
+    if (subgastoExigeAdjunto(d) && !d.adj_cajachica) {
+      const nombreSub = d.subgasto_obj?.nombre || d.detalle || 'Gasto';
+      return `El comprobante #${nro} (${nombreSub}) requiere adjuntar el comprobante o foto obligatoria para liquidar.`;
     }
   }
 
