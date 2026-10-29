@@ -17,12 +17,69 @@ const API_URL = import.meta.env.DEV ? '' : import.meta.env.VITE_API_URL;
  */
 export const extraerPuesto = (u) => {
   if (!u) return '';
+  if (u.puesto_id && typeof u.puesto_id === 'object' && u.puesto_id.nombre) {
+    return String(u.puesto_id.nombre).trim();
+  }
   return u.puesto_id?.nombre || u.puesto || '';
 };
 
+/**
+ * Extrae el nombre de área del usuario:
+ * - Si area_id es un objeto, se elige area_id.nombre (ej: { id: 6, nombre: "Logística Inversa" })
+ * - Solo en caso de que area_id = null o falsy, se usa area (string, ej: "ALMACÉN INSTRUMENTALES")
+ */
 export const extraerArea = (u) => {
   if (!u) return '';
-  return u.area_id?.nombre || (typeof u.area_id === 'string' ? u.area_id : '') || (typeof u.area === 'string' ? u.area : '') || u.area?.nombre || u.area_nombre || '';
+  // 1. Si area_id viene como objeto con nombre, se elige area_id.nombre
+  if (u.area_id && typeof u.area_id === 'object' && u.area_id.nombre) {
+    return String(u.area_id.nombre).trim();
+  }
+  // 2. Solo en caso de que area_id sea null (o undefined/falsy), se usa el campo area
+  if (u.area_id === null || u.area_id === undefined) {
+    if (typeof u.area === 'string' && u.area.trim()) return u.area.trim();
+    if (u.area && typeof u.area === 'object' && u.area.nombre) return String(u.area.nombre).trim();
+  }
+  // 3. Si area_id es string descriptivo (no numérico y no url)
+  if (typeof u.area_id === 'string' && isNaN(Number(u.area_id)) && !u.area_id.startsWith('http')) {
+    return u.area_id.trim();
+  }
+  // 4. Si se cuenta con u.area como string válido
+  if (typeof u.area === 'string' && u.area.trim() && isNaN(Number(u.area))) {
+    return u.area.trim();
+  }
+  return u.area_nombre || '';
+};
+
+export const resolverAreaId = (u) => {
+  if (!u) return null;
+  if (u.area_id && typeof u.area_id === 'object') {
+    return u.area_id.id || null;
+  }
+  if (u.area_id && (typeof u.area_id === 'number' || /^\d+$/.test(u.area_id))) {
+    return Number(u.area_id);
+  }
+  if (u.area && typeof u.area === 'object') {
+    return u.area.id || null;
+  }
+  return null;
+};
+
+export const resolverAreaUrl = (u) => {
+  if (!u) return null;
+  if (u.area_id && typeof u.area_id === 'object' && u.area_id.url) {
+    return u.area_id.url;
+  }
+  if (typeof u.area_id === 'string' && u.area_id.startsWith('http')) {
+    return u.area_id;
+  }
+  if (u.area && typeof u.area === 'object' && u.area.url) {
+    return u.area.url;
+  }
+  const id = resolverAreaId(u);
+  if (id) {
+    return `${API_URL}/EU_Area/${id}/`;
+  }
+  return null;
 };
 
 /**
@@ -97,19 +154,25 @@ const Step1Cabecera = ({ datos, onChange }) => {
           const res = await fetchAuth(`${API_URL}/users/${user.id}/?format=json`);
           const data = await res.json();
           usuarioUrl = data.url || null;
-          areaUrl = data.area_id?.url || data.area?.url || (data.area_id ? `${API_URL}/Area/${data.area_id}/` : null);
+          areaUrl = resolverAreaUrl(data) || (data.area_id ? `${API_URL}/EU_Area/${data.area_id}/` : null);
+          const areaNombreRemota = extraerArea(data);
+          if (areaNombreRemota) {
+            areaNombreInicial = areaNombreRemota;
+          }
           updateUser({ url: usuarioUrl, area_url: areaUrl });
         } catch {
           console.warn('No se pudo recuperar la URL de perfil del usuario.');
         }
       }
 
+      const areaNombreInicial = extraerArea(user);
       onChange({
         usuario_id: user.id,
         usuario_url: usuarioUrl,
-        area_id: user.area_id || user.area || null,
+        area_id: resolverAreaId(user),
         area_url: areaUrl,
-        area_nombre: user.area_nombre || user.area || user.area_id || '',
+        area_nombre: areaNombreInicial,
+        area: areaNombreInicial,
         usuario_nombre: user.nombre,
         usuario_puesto: user.puesto,
         fecha_solicitud: ahora,
@@ -171,11 +234,10 @@ const Step1Cabecera = ({ datos, onChange }) => {
     }
 
     if (esMandoArea) {
-      const miAreaNombre = (user?.area_id || user?.area || user?.area_nombre || '').toLowerCase().trim();
+      const miAreaNombre = extraerArea(user).toLowerCase().trim();
 
       return todosUsuarios.filter((u) => {
-        // En users serializer el área siempre es u.area_id.nombre
-        const uAreaNombre = (u.area_id?.nombre || (typeof u.area_id === 'string' ? u.area_id : '') || u.area || u.area_nombre || '').toLowerCase().trim();
+        const uAreaNombre = extraerArea(u).toLowerCase().trim();
 
         if (miAreaNombre && uAreaNombre && miAreaNombre === uAreaNombre) {
           return true;
@@ -201,9 +263,9 @@ const Step1Cabecera = ({ datos, onChange }) => {
           u.username ||
           `Usuario #${u.id}`;
 
-        // El área siempre es area_id.nombre y el puesto puesto_id.nombre para users serializer
-        const nombreArea = u.area_id?.nombre || (typeof u.area_id === 'string' ? u.area_id : '') || (typeof u.area === 'string' ? u.area : '') || u.area?.nombre || u.area_nombre || '';
-        const nombrePuesto = u.puesto_id?.nombre || '';
+        // El área se extrae de area_id.nombre y solo si area_id = null de area
+        const nombreArea = extraerArea(u);
+        const nombrePuesto = extraerPuesto(u);
         const subtituloAreaPuesto = [nombreArea, nombrePuesto].filter(Boolean).join(' - ');
 
         return {
@@ -213,8 +275,8 @@ const Step1Cabecera = ({ datos, onChange }) => {
           sublabel: esGerenteOSuperuser ? (subtituloAreaPuesto || null) : null,
           busquedaExtra: subtituloAreaPuesto,
           url: u.url || `${API_URL}/users/${u.id}/`,
-          area_id: u.area_id?.id || u.area_id || u.area?.id || u.area || null,
-          area_url: u.area_id?.url || u.area?.url || null,
+          area_id: resolverAreaId(u),
+          area_url: resolverAreaUrl(u),
           area_nombre: nombreArea,
           puesto_nombre: nombrePuesto,
         };
@@ -232,14 +294,40 @@ const Step1Cabecera = ({ datos, onChange }) => {
         usuario_url: seleccionado.url,
         usuario_nombre: seleccionado.label,
         usuario_puesto: seleccionado.puesto_nombre,
-        ...(seleccionado.area_nombre ? {
-          area_id: seleccionado.area_id || user.area_id || user.area || null,
-          area_url: seleccionado.area_url || user.area_url,
-          area_nombre: seleccionado.area_nombre || user.area_nombre || user.area || user.area_id || '',
-        } : {})
+        area_id: seleccionado.area_id,
+        area_url: seleccionado.area_url,
+        area_nombre: seleccionado.area_nombre,
+        area: seleccionado.area_nombre,
       });
     }
   };
+
+  // Determinar el nombre legible del área a mostrar:
+  // Se debe elegir area_id.nombre y solo en caso de que area_id = null se usa area
+  const areaNombreVisible = useMemo(() => {
+    // 1. Si datos tiene area_nombre explícito como texto (no numérico)
+    if (datos?.area_nombre && typeof datos.area_nombre === 'string' && isNaN(Number(datos.area_nombre))) {
+      return datos.area_nombre.trim();
+    }
+    // 2. Si hay un solicitante seleccionado en datos.usuario_id, buscar su área en las opciones
+    if (datos?.usuario_id && opcionesUsuarios.length > 0) {
+      const opt = opcionesUsuarios.find((o) => String(o.value) === String(datos.usuario_id));
+      if (opt?.area_nombre) return opt.area_nombre;
+    }
+    // 3. Si datos tiene el campo area como texto no numérico
+    if (datos?.area && typeof datos.area === 'string' && isNaN(Number(datos.area))) {
+      return datos.area.trim();
+    }
+    // 4. Si datos.area_id es un objeto con nombre
+    if (datos?.area_id && typeof datos.area_id === 'object' && datos.area_id.nombre) {
+      return String(datos.area_id.nombre).trim();
+    }
+    // 5. Fallback con el usuario de sesión
+    const areaUser = extraerArea(user);
+    if (areaUser) return areaUser;
+
+    return '—';
+  }, [datos?.area_nombre, datos?.usuario_id, datos?.area, datos?.area_id, opcionesUsuarios, user]);
 
   return (
     <div className="space-y-4 animate-fade-in font-outfit">
@@ -249,12 +337,12 @@ const Step1Cabecera = ({ datos, onChange }) => {
       </div>
 
       {/* Alerta si falta el área del usuario */}
-      {(!user?.area_id || user.area_id === 'Sin Área') && (!user?.area || user.area === 'Sin Área') && (!user?.area_nombre || user.area_nombre === 'Sin Área') && (
-        <div className="flex items-center gap-3 bg-red-50 border border-red-200 text-red-600 text-sm font-bold rounded-2xl px-4 py-3 animate-shake">
+      {(!user?.area_id || user.area_id === 'Sin Área') && (!user?.area || user.area === 'Sin Área') &&
+        (<div className="flex items-center gap-3 bg-red-50 border border-red-200 text-red-600 text-sm font-bold rounded-2xl px-4 py-3 animate-shake">
           <Info size={18} />
           <span>Error: Tu usuario no tiene un área asignada. No podrás continuar con la solicitud.</span>
         </div>
-      )}
+        )}
 
       {/* Área (solo lectura del requerimiento) y Solicitante */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -262,7 +350,7 @@ const Step1Cabecera = ({ datos, onChange }) => {
           <label className="block text-xs font-black text-brand-dark uppercase tracking-widest mb-2">Área</label>
           <div className="bg-brand-light border border-gray-100 rounded-2xl px-4 py-3 text-sm font-semibold text-gray-500 flex items-center gap-2">
             <Info size={15} className="text-brand-primary shrink-0" />
-            {datos.area_nombre || datos.area_id || user?.area_nombre || user?.area || user?.area_id || '—'}
+            <span>{areaNombreVisible}</span>
           </div>
         </div>
 

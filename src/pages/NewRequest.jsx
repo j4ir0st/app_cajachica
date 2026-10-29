@@ -64,7 +64,9 @@ const mapearCabeceraExistente = (req) => {
 
   const areaId = typeof req.area_id === 'object' ? req.area_id.id : (req.area_id || req.area || null);
   const areaUrl = typeof req.area_id === 'object' ? req.area_id.url : null;
-  const areaNombre = typeof req.area_id === 'object' ? req.area_id.nombre : String(req.area_id || req.area || '');
+  const areaNombre = (typeof req.area_id === 'object' && req.area_id?.nombre)
+    ? req.area_id.nombre
+    : (req.area || (req.area_id && isNaN(Number(req.area_id)) ? req.area_id : ''));
 
   return {
     id: req.id || extraerId(req.url),

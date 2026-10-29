@@ -74,8 +74,9 @@ const Header = () => {
     user?.username ||
     'Usuario';
 
+  const nombreAreaUser = (typeof user?.area_id === 'object' && user?.area_id?.nombre) || user?.area || (typeof user?.area_id === 'string' && isNaN(Number(user.area_id)) ? user.area_id : '') || '';
   const areaPuesto =
-    [user?.area_id, user?.puesto].filter(Boolean).join(' - ') || 'Sin Asignación';
+    [nombreAreaUser, user?.puesto].filter(Boolean).join(' - ') || 'Sin Asignación';
 
   const emailUsuario =
     user?.email || user?.correo || (user?.username ? `${user.username}@surgicorperu.com` : '—');

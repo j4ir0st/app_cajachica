@@ -24,14 +24,17 @@ import {
   Filter,
   ArrowUpRight,
   ChevronDown,
-  MapPin
+  MapPin,
+  ShieldCheck,
+  Mail,
+  Send
 } from 'lucide-react';
 import { useUserStore } from '../store/userStore';
 import { useCatalogoStore } from '../store/catalogoStore';
 import { fetchAuth, extraerMensajeError } from '../utils/fetchAuth';
 import { obtenerTipoCaja, resolverClaveTipoIndividual } from '../utils/tipoCaja';
 import { esArchivoPdf } from '../utils/archivoUtil';
-import { resolverRutaOEntidad } from '../utils/entidades';
+import { resolverRutaOEntidad, esGastoTipoTaxi } from '../utils/entidades';
 import { puedeAccederBalanceSemanal } from '../utils/permisos';
 import ModalVisorComprobante from '../components/ModalVisorComprobante';
 import Toast from '../components/Toast';
@@ -114,6 +117,12 @@ const BalanceSemanal = () => {
   const [mostrarPopupRequerimientos, setMostrarPopupRequerimientos] = useState(false);
   const [descargandoExcel, setDescargandoExcel] = useState(false);
   const [descargandoPdf, setDescargandoPdf] = useState(false);
+  const [mostrarModalCorreo, setMostrarModalCorreo] = useState(false);
+  const [enviandoCorreo, setEnviandoCorreo] = useState(false);
+  const [correoDestinatarios, setCorreoDestinatarios] = useState('jdcastillo@surgicorperu.com');
+  const [correoMensaje, setCorreoMensaje] = useState(
+    'Estimada Jessica,\n\nAdjunto el reporte de cierre semanal de Caja Chica con el desglose en Excel y PDF correspondiente para su respectiva revisión y trámite de reembolso.\n\nSaludos cordiales.'
+  );
 
   // ============================================================================
   // CARGA DE SALDOS SEMANALES (INFINITE SCROLL CON TOP=10)
@@ -451,7 +460,7 @@ const BalanceSemanal = () => {
       .sort((a, b) => b.monto - a.monto);
   }, [requerimientosSemana]);
 
-  // Desglose multi-tabla por solicitante para el reporte
+  // Desglose multi-tabla por solicitante para el reporte en PDF (solo registros Tipo C)
   const reportePorSolicitante = useMemo(() => {
     if (!requerimientosSemana || requerimientosSemana.length === 0) return [];
 
@@ -462,44 +471,71 @@ const BalanceSemanal = () => {
       const nombreUsuario = obtenerNombreSolicitante(req.usuario_id);
       const clave = String(idUsuario || nombreUsuario);
 
-      if (!grupos[clave]) {
-        grupos[clave] = {
-          idUsuario,
-          nombre: nombreUsuario,
-          cantidadSolicitudes: 0,
-          totalLiquidado: 0,
-          totalGastado: 0,
-          gastos: [],
-        };
-      }
-
-      grupos[clave].cantidadSolicitudes += 1;
-      const gastadoReq = parseFloat(req.total_gastado || req.monto_solicitado || 0);
-      grupos[clave].totalGastado += gastadoReq;
-      grupos[clave].totalLiquidado += gastadoReq;
-
       const listaDet = req.detalle || req.detalles || [];
       if (listaDet.length > 0) {
-        listaDet.forEach((det) => {
-          const tipoCajaDet = resolverClaveTipoIndividual(det);
+        // Filtrar exclusivamente gastos de Tipo C (Sin factura)
+        const detallesTipoC = listaDet.filter((det) => resolverClaveTipoIndividual(det) === 'C');
+        if (detallesTipoC.length === 0) return;
+
+        if (!grupos[clave]) {
+          grupos[clave] = {
+            idUsuario,
+            nombre: nombreUsuario,
+            cantidadSolicitudes: 0,
+            totalLiquidado: 0,
+            totalGastado: 0,
+            gastos: [],
+          };
+        }
+
+        grupos[clave].cantidadSolicitudes += 1;
+
+        detallesTipoC.forEach((det) => {
+          const costoVal = parseFloat(det.costo || 0);
+          grupos[clave].totalGastado += costoVal;
+          grupos[clave].totalLiquidado += costoVal;
+
+          const esTaxi = esGastoTipoTaxi(det);
+          const { ruta } = resolverRutaOEntidad(det, entidades);
+
           grupos[clave].gastos.push({
             reqId: req.id,
-            fecha: req.fecha_solicitud,
-            tipoCaja: tipoCajaDet,
+            fecha: det.fecha_gasto || req.fecha_solicitud,
             subgasto: det.subgasto_id?.nombre || (typeof det.subgasto_id === 'string' ? det.subgasto_id : 'Gasto general'),
             categoria: det.subgasto_id?.tipogasto_id?.nombre || '',
+            ruta: esTaxi && ruta ? ruta : '-',
             nroFactura: det.nro_factura || det.detalle || 'Comprobante',
             nroRuc: det.nro_ruc || '—',
-            costo: parseFloat(det.costo || 0),
+            costo: costoVal,
           });
         });
       } else {
+        // Si no tiene listaDet anidada, verificar si el requerimiento es Tipo C
+        const tipoReq = obtenerTipoCaja(req).tipo;
+        if (tipoReq !== 'C') return;
+
+        if (!grupos[clave]) {
+          grupos[clave] = {
+            idUsuario,
+            nombre: nombreUsuario,
+            cantidadSolicitudes: 0,
+            totalLiquidado: 0,
+            totalGastado: 0,
+            gastos: [],
+          };
+        }
+
+        const gastadoReq = parseFloat(req.total_gastado || req.monto_solicitado || 0);
+        grupos[clave].cantidadSolicitudes += 1;
+        grupos[clave].totalGastado += gastadoReq;
+        grupos[clave].totalLiquidado += gastadoReq;
+
         grupos[clave].gastos.push({
           reqId: req.id,
           fecha: req.fecha_solicitud,
-          tipoCaja: obtenerTipoCaja(req).etiqueta.replace('TIPO: ', ''),
           subgasto: req.obs || 'Rendición de gastos',
           categoria: 'General',
+          ruta: '-',
           nroFactura: `Req #${req.id}`,
           nroRuc: '—',
           costo: gastadoReq,
@@ -508,7 +544,7 @@ const BalanceSemanal = () => {
     });
 
     return Object.values(grupos).sort((a, b) => a.nombre.localeCompare(b.nombre));
-  }, [requerimientosSemana]);
+  }, [requerimientosSemana, entidades]);
 
   // ============================================================================
   // EXPORTACIÓN E IMPRESIÓN AISLADA DEL DOCUMENTO
@@ -798,6 +834,93 @@ const BalanceSemanal = () => {
     }
   };
 
+  // Envío del reporte por correo electrónico con adjuntos oficiales desde el backend
+  const manejarEnviarCorreo = async (e) => {
+    if (e) e.preventDefault();
+    if (!semanaSeleccionada) return;
+
+    const listaDestinos = correoDestinatarios
+      .split(/[,;\n]/)
+      .map((d) => d.trim())
+      .filter((d) => Boolean(d));
+
+    if (listaDestinos.length === 0) {
+      setNotificacion({
+        tipo: 'error',
+        titulo: 'Destinatario requerido',
+        mensaje: 'Por favor ingrese al menos un correo electrónico de destino.',
+      });
+      return;
+    }
+
+    setEnviandoCorreo(true);
+    try {
+      const urlsCandidatas = [];
+
+      if (semanaSeleccionada.id) {
+        urlsCandidatas.push(`${API_URL}/RC_SaldoSemanal/${semanaSeleccionada.id}/enviar_correo/`);
+        urlsCandidatas.push(`${API_URL}/api/cajachica/RC_SaldoSemanal/${semanaSeleccionada.id}/enviar_correo/`);
+        urlsCandidatas.push(`${API_URL}/RC_SaldoSemanal/${semanaSeleccionada.id}/enviar-correo/`);
+      }
+
+      if (semanaSeleccionada.url) {
+        const urlBase = semanaSeleccionada.url.replace(/\/$/, '');
+        urlsCandidatas.push(`${urlBase}/enviar_correo/`);
+        urlsCandidatas.push(`${urlBase}/enviar-correo/`);
+      }
+
+      let resExito = null;
+      let errorMsg = null;
+
+      for (const ruta of urlsCandidatas) {
+        try {
+          const res = await fetchAuth(ruta, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Accept: 'application/json, */*',
+            },
+            body: JSON.stringify({
+              destinatarios: listaDestinos,
+              to: listaDestinos,
+              asunto: `Reporte de Caja Chica - ${semanaSeleccionada.codigo_cierre || semanaSeleccionada.id}`,
+              cuerpo: correoMensaje,
+              mensaje: correoMensaje,
+            }),
+          });
+          if (res.ok) {
+            resExito = res;
+            break;
+          } else {
+            errorMsg = await extraerMensajeError(res);
+          }
+        } catch (e) {
+          console.warn(`[BalanceSemanal] Intento de envío en ${ruta} falló:`, e);
+        }
+      }
+
+      if (!resExito) {
+        throw new Error(errorMsg || 'No se pudo enviar el correo desde el servidor.');
+      }
+
+      setNotificacion({
+        tipo: 'exito',
+        titulo: 'Correo Enviado con Éxito',
+        mensaje: `Se envió el reporte con los adjuntos en Excel y PDF a: ${listaDestinos.join(', ')}.`,
+      });
+      setMostrarModalCorreo(false);
+    } catch (err) {
+      console.error('[BalanceSemanal] Error al enviar correo:', err);
+      setNotificacion({
+        tipo: 'error',
+        titulo: 'Error al Enviar Correo',
+        mensaje: err.message || 'Ocurrió un error al enviar el correo con los reportes.',
+      });
+    } finally {
+      setEnviandoCorreo(false);
+    }
+  };
+
   // ============================================================================
   // RENDERIZADO
   // ============================================================================
@@ -874,6 +997,16 @@ const BalanceSemanal = () => {
               >
                 <Printer className="w-5 h-5 sm:w-4 sm:h-4 shrink-0" />
                 <span className="tracking-wide">Reporte Semanal</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setMostrarModalCorreo(true)}
+                className="flex items-center gap-2 px-3 py-2 sm:px-4 sm:py-2 rounded-2xl bg-sky-600 hover:bg-sky-700 text-white text-xs font-black shadow-md shadow-sky-600/20 hover:scale-[1.02] active:scale-[0.98] transition-all"
+                title="Enviar Reporte por Correo"
+              >
+                <Mail className="w-5 h-5 sm:w-4 sm:h-4 shrink-0" />
+                <span className="tracking-wide hidden sm:inline">Enviar Correo</span>
               </button>
             </div>
           )}
@@ -1269,7 +1402,18 @@ const BalanceSemanal = () => {
                   className="p-2 sm:px-3 sm:py-1.5 rounded-xl bg-brand-primary hover:bg-brand-secondary text-white text-xs font-black shadow-md transition-all flex items-center gap-1.5"
                 >
                   <Printer size={16} />
-                  <span className="hidden sm:inline">Imprimir</span>
+                  <span className="hidden sm:inline">Imprimir PDF</span>
+                </button>
+
+                {/* Botón: Enviar Correo a la derecha de Imprimir PDF */}
+                <button
+                  type="button"
+                  onClick={() => setMostrarModalCorreo(true)}
+                  title="Enviar reporte por correo electrónico con adjuntos oficiales"
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-sky-600 hover:bg-sky-700 text-white text-xs font-black shadow-md transition-all"
+                >
+                  <Mail size={14} />
+                  <span>Enviar Correo</span>
                 </button>
 
                 {/* Botón 2: Guardar PDF */}
@@ -1405,8 +1549,8 @@ const BalanceSemanal = () => {
                         <tr className="bg-slate-50 text-slate-600 font-black text-[10px] uppercase border-b border-gray-200">
                           <th className="p-2 border-r border-gray-200 w-16 text-center"># Req</th>
                           <th className="p-2 border-r border-gray-200 w-24">Fecha</th>
-                          <th className="p-2 border-r border-gray-200 w-20 text-center">Tipo Caja</th>
                           <th className="p-2 border-r border-gray-200">Concepto / Subgasto</th>
+                          <th className="p-2 border-r border-gray-200 w-36">Origen → Destino</th>
                           <th className="p-2 border-r border-gray-200">Comprobante / N° Doc</th>
                           <th className="p-2 border-r border-gray-200 w-28">RUC</th>
                           <th className="p-2 text-right w-24">Importe</th>
@@ -1417,14 +1561,12 @@ const BalanceSemanal = () => {
                           <tr key={idx} className="border-b border-gray-100 hover:bg-slate-50/50">
                             <td className="p-2 border-r border-gray-200 text-center font-bold text-slate-700">#{g.reqId}</td>
                             <td className="p-2 border-r border-gray-200 text-slate-500 text-[11px]">{formatearFechaCorta(g.fecha)}</td>
-                            <td className="p-2 border-r border-gray-200 text-center">
-                              <span className="px-1.5 py-0.5 rounded text-[9px] font-black bg-slate-100 text-slate-700 border border-slate-200">
-                                Tipo {g.tipoCaja}
-                              </span>
-                            </td>
                             <td className="p-2 border-r border-gray-200 text-slate-800 font-medium">
                               {g.subgasto}
                               {g.categoria && <span className="text-[10px] text-gray-400 block">{g.categoria}</span>}
+                            </td>
+                            <td className="p-2 border-r border-gray-200 text-slate-600 text-[11px]">
+                              {g.ruta || '—'}
                             </td>
                             <td className="p-2 border-r border-gray-200 text-slate-600 text-[11px] font-mono">{g.nroFactura}</td>
                             <td className="p-2 border-r border-gray-200 text-slate-500 text-[11px] font-mono">{g.nroRuc}</td>
@@ -1446,20 +1588,127 @@ const BalanceSemanal = () => {
                   </div>
                 ))}
 
-                {/* Total Consolidado de la Semana */}
+                {/* Total Consolidado de la Semana (Tipo C) */}
                 <div
                   className="bg-slate-900 text-white p-3.5 rounded-xl flex items-center justify-between font-black text-sm"
                   style={{ pageBreakInside: 'avoid', breakInside: 'avoid' }}
                 >
                   <span className="uppercase tracking-wider text-slate-200">
-                    TOTAL GENERAL LIQUIDADO EN SEMANA:
+                    TOTAL GASTOS SIN FACTURA (TIPO C):
                   </span>
                   <span className="text-emerald-400 text-base">
-                    S/ {totalGastoVal.toFixed(2)}
+                    S/ {reportePorSolicitante.reduce((acc, s) => acc + s.totalGastado, 0).toFixed(2)}
                   </span>
                 </div>
               </div>
             </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* ========================================================================
+          MODAL POPUP: ENVIAR REPORTE POR CORREO ELECTRÓNICO
+         ======================================================================== */}
+      {mostrarModalCorreo && semanaSeleccionada && createPortal(
+        <div
+          className="fixed inset-0 !m-0 z-50 flex items-center justify-center bg-brand-dark/75 backdrop-blur-sm p-4 overflow-y-auto"
+          onClick={() => !enviandoCorreo && setMostrarModalCorreo(false)}
+        >
+          <div
+            className="bg-white rounded-3xl w-full max-w-lg shadow-2xl border border-gray-100 flex flex-col overflow-hidden animate-scale-up"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Cabecera del Modal */}
+            <div className="px-6 py-4 bg-brand-dark text-white flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-sky-500/20 text-sky-400 flex items-center justify-center border border-sky-400/30">
+                  <Mail size={18} />
+                </div>
+                <div>
+                  <h3 className="text-sm font-black tracking-wide">
+                    Enviar Reporte por Correo
+                  </h3>
+                  <p className="text-[11px] text-gray-300">
+                    Cierre: {semanaSeleccionada.codigo_cierre || `#${semanaSeleccionada.id}`}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setMostrarModalCorreo(false)}
+                disabled={enviandoCorreo}
+                className="p-1.5 rounded-xl text-white/60 hover:text-white hover:bg-white/10 transition-colors"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Formulario con los 2 campos requeridos */}
+            <form onSubmit={manejarEnviarCorreo} className="p-6 space-y-4 text-xs">
+              {/* Campo 1: A quién se envía (correos destino) */}
+              <div>
+                <label className="block text-[11px] font-black uppercase tracking-wider text-slate-700 mb-1.5">
+                  A quién se envía (Correos destino) <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={correoDestinatarios}
+                  onChange={(e) => setCorreoDestinatarios(e.target.value)}
+                  placeholder="ej: jdcastillo@surgicorperu.com, jcabanillas@surgicorperu.com"
+                  disabled={enviandoCorreo}
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-gray-200 focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20 outline-none text-xs text-slate-800 transition-all font-mono"
+                />
+                <p className="text-[10px] text-gray-400 mt-1">
+                  Puede ingresar uno o varios correos separados por comas (,).
+                </p>
+              </div>
+
+              {/* Campo 2: Cuerpo del mensaje */}
+              <div>
+                <label className="block text-[11px] font-black uppercase tracking-wider text-slate-700 mb-1.5">
+                  Cuerpo del mensaje <span className="text-red-500">*</span>
+                </label>
+                <textarea
+                  required
+                  rows={5}
+                  value={correoMensaje}
+                  onChange={(e) => setCorreoMensaje(e.target.value)}
+                  placeholder="Escriba el cuerpo o mensaje a incluir en el correo..."
+                  disabled={enviandoCorreo}
+                  className="w-full px-3.5 py-2.5 rounded-xl border border-gray-200 focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20 outline-none text-xs text-slate-800 transition-all resize-none leading-relaxed"
+                />
+              </div>
+
+              {/* Nota sobre los adjuntos del backend */}
+              <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl flex items-start gap-2.5">
+                <FileSpreadsheet size={16} className="text-emerald-600 shrink-0 mt-0.5" />
+                <p className="text-[11px] text-slate-600 leading-snug">
+                  Se adjuntarán automáticamente los archivos oficiales <strong>Excel (.xlsx)</strong> y <strong>PDF (.pdf)</strong> generados desde el backend para este cierre.
+                </p>
+              </div>
+
+              {/* Botones de Acción */}
+              <div className="pt-2 flex items-center justify-end gap-2.5 border-t border-gray-100">
+                <button
+                  type="button"
+                  onClick={() => setMostrarModalCorreo(false)}
+                  disabled={enviandoCorreo}
+                  className="px-4 py-2 rounded-xl border border-gray-200 hover:bg-gray-50 text-slate-700 font-bold text-xs transition-all disabled:opacity-50"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="submit"
+                  disabled={enviandoCorreo}
+                  className="flex items-center gap-2 px-5 py-2 rounded-xl bg-sky-600 hover:bg-sky-700 text-white font-black text-xs shadow-md shadow-sky-600/20 hover:scale-[1.01] active:scale-[0.99] transition-all disabled:opacity-50"
+                >
+                  <Send size={14} className={enviandoCorreo ? 'animate-spin' : ''} />
+                  <span>{enviandoCorreo ? 'Enviando Reporte...' : 'Enviar Correo'}</span>
+                </button>
+              </div>
+            </form>
           </div>
         </div>,
         document.body
