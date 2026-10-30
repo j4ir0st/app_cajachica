@@ -74,7 +74,7 @@ const Header = () => {
     user?.username ||
     'Usuario';
 
-  const nombreAreaUser = (typeof user?.area_id === 'object' && user?.area_id?.nombre) || user?.area || (typeof user?.area_id === 'string' && isNaN(Number(user.area_id)) ? user.area_id : '') || '';
+  const nombreAreaUser = (typeof user?.area_id === 'object' && user?.area_id?.nombre) || (typeof user?.area_id === 'string' && isNaN(Number(user.area_id)) ? user.area_id : '') || user?.area || '';
   const areaPuesto =
     [nombreAreaUser, user?.puesto].filter(Boolean).join(' - ') || 'Sin Asignación';
 
@@ -99,9 +99,8 @@ const Header = () => {
             </h1>
             <RefreshCw
               size={13}
-              className={`text-gray-300 group-hover:text-brand-primary transition-all ${
-                cacheLimpiado ? 'animate-spin text-brand-primary' : ''
-              }`}
+              className={`text-gray-300 group-hover:text-brand-primary transition-all ${cacheLimpiado ? 'animate-spin text-brand-primary' : ''
+                }`}
             />
           </button>
           {cacheLimpiado && (
@@ -182,9 +181,8 @@ const Header = () => {
                 </span>
                 <ChevronDown
                   size={14}
-                  className={`text-gray-400 group-hover:text-brand-primary transition-transform duration-300 ${
-                    isDropdownOpen ? 'rotate-180' : ''
-                  }`}
+                  className={`text-gray-400 group-hover:text-brand-primary transition-transform duration-300 ${isDropdownOpen ? 'rotate-180' : ''
+                    }`}
                 />
               </div>
               <span className="mt-0.5 px-2 py-0.5 rounded-full text-[9.5px] font-bold bg-brand-light text-brand-primary border border-brand-primary/20 truncate max-w-[160px] md:max-w-[200px]">
@@ -195,9 +193,8 @@ const Header = () => {
             {/* Chevron solo visible en móvil cuando el texto está oculto */}
             <ChevronDown
               size={13}
-              className={`text-gray-400 sm:hidden transition-transform duration-300 ${
-                isDropdownOpen ? 'rotate-180' : ''
-              }`}
+              className={`text-gray-400 sm:hidden transition-transform duration-300 ${isDropdownOpen ? 'rotate-180' : ''
+                }`}
             />
           </button>
 

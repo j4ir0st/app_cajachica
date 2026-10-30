@@ -11,12 +11,12 @@ const TTL_SEMANA_MS = 7 * 24 * 60 * 60 * 1000; // 1 semana (7 días) para entida
 // Claves utilizadas en localStorage
 export const CLAVES_CATALOGO = {
   tiposGasto: 'cc_cache_tipogasto',
-  subgastos:  'cc_cache_subgasto_v2',
-  entidades:  'cc_cache_entidades_v4',
+  subgastos: 'cc_cache_subgasto_v2',
+  entidades: 'cc_cache_entidades_v5',
   provincias: 'cc_cache_provincias',
-  empresas:   'cc_cache_empresas',
-  placas:     'cc_cache_placas',
-  usuarios:   'cc_cache_usuarios_activos_v3',
+  empresas: 'cc_cache_empresas',
+  placas: 'cc_cache_placas',
+  usuarios: 'cc_cache_usuarios_activos_v3',
 };
 
 /**

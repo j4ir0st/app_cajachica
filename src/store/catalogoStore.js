@@ -72,7 +72,7 @@ export const useCatalogoStore = create((set, get) => ({
       }
 
       try {
-        let urlActual = `${API_URL}/RC_Entidades/?tipo_sede=E&de_baja=N&top=1000&format=json`;
+        let urlActual = `${API_URL}/RC_Entidades/?tipo_sede=E&de_baja=N&sedes_excluidas=PRINCIPAL&top=1000&format=json`;
         const acumuladas = [];
         let pagina = 1;
         const maxPaginas = 25; // Seguridad contra bucles infinitos
