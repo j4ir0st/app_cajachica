@@ -403,7 +403,7 @@ const Step1Cabecera = ({ datos, onChange }) => {
               min="0"
               step="0.01"
               placeholder="0.00 — se calcula del detalle"
-              value={datos.monto_solicitado || ''}
+              value={datos.monto_solicitado ?? ''}
               onChange={(e) => manejarCambio('monto_solicitado', e.target.value)}
               className="w-full bg-white border-2 border-gray-100 focus:border-brand-primary rounded-2xl pl-12 pr-4 py-3 text-sm font-semibold text-brand-dark outline-none transition-colors"
             />

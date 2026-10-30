@@ -274,7 +274,7 @@ const validarParaLiquidacion = (cabecera, detalles, montoFinal, totalGastos) => 
     }
 
     const costo = parseFloat(d.costo);
-    if (isNaN(costo) || costo <= 0) {
+    if (isNaN(costo) || costo < 0) {
       return `El gasto #${nro} tiene un importe inválido.`;
     }
 

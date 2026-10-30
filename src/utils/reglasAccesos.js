@@ -157,8 +157,8 @@ export const esChofer = (user) => {
  */
 export const esAreaDistribucion = (user) => {
   if (!user) return false;
-  const a = normalizarTexto(obtenerAreaUsuario(user));
-  return a.includes('distribucion');
+  const area = normalizarTexto(user.area);
+  return area.includes('distribucion');
 };
 
 /**
@@ -166,8 +166,8 @@ export const esAreaDistribucion = (user) => {
  */
 export const esAreaInstrumentales = (user) => {
   if (!user) return false;
-  const a = normalizarTexto(obtenerAreaUsuario(user));
-  return a.includes('instrumental');
+  const area = normalizarTexto(user.area);
+  return area.includes('instrumental');
 };
 
 /**
