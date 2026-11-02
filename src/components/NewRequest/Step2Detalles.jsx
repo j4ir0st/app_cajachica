@@ -45,6 +45,12 @@ const OPCIONES_ZONA = [
   { valor: 'P', etiqueta: 'Provincia' },
 ];
 
+// RUCs de empresas administradas internamente (no permitidas como emisor/proveedor)
+const RUCS_EMPRESAS_PROPIAS = {
+  '20516920123': 'SURGICORP S.R.L.',
+  '20522608417': 'RR MEDICAL S.R.L.',
+};
+
 const PASOS_WIZARD = [
   { id: 1, titulo: 'Concepto', descripcion: 'Tipo y subgasto' },
   { id: 2, titulo: 'Monto y Zona', descripcion: 'Importe y ubicación' },
@@ -464,6 +470,22 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
     const rucLimpio = String(ruc || '').trim();
     if (rucLimpio.length !== 11) return;
 
+    // Validación de empresas propias: Surgicorp y RR Medical
+    if (RUCS_EMPRESAS_PROPIAS[rucLimpio]) {
+      const nombreEmpresa = RUCS_EMPRESAS_PROPIAS[rucLimpio];
+      setFormulario((prev) => ({
+        ...prev,
+        razon_social: '',
+      }));
+      setMensajeRuc({
+        tipo: 'error',
+        texto: `Está ingresando el RUC de ${nombreEmpresa}. Recuerde que en el campo anterior ("Factura a Nombre De") se selecciona a nombre de quién se emite la factura, pero en este campo debe ingresar el RUC de la factura del negocio del cual se hizo la compra.`,
+      });
+      setErrorLocal(`El RUC ${rucLimpio} pertenece a ${nombreEmpresa}. Ingrese el RUC del negocio proveedor donde realizó la compra.`);
+      setMostrarCampoManualRazonSocial(false);
+      return;
+    }
+
     // RUC 10: Persona Natural (OpenRUC responde 404 out_of_scope)
     if (rucLimpio.startsWith('10')) {
       setMensajeRuc({
@@ -585,6 +607,12 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
         }
         if (!formulario.nro_ruc || formulario.nro_ruc.trim().length !== 11) {
           setErrorLocal('El RUC es obligatorio y debe contener exactamente 11 dígitos numéricos.');
+          return false;
+        }
+        const rucIngresado = (formulario.nro_ruc || '').trim();
+        if (RUCS_EMPRESAS_PROPIAS[rucIngresado]) {
+          const nombreEmpresa = RUCS_EMPRESAS_PROPIAS[rucIngresado];
+          setErrorLocal(`El RUC ${rucIngresado} pertenece a ${nombreEmpresa}. En el campo anterior ("Factura a Nombre De") se selecciona la empresa a nombre de quién se emite la factura, pero en este campo debe ingresar el RUC del negocio del cual se hizo la compra.`);
           return false;
         }
         if (!formulario.razon_social || formulario.razon_social.trim() === '') {
@@ -1345,13 +1373,18 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
                               consultarRucOpenRuc(val);
                             } else {
                               setMensajeRuc(null);
+                              setErrorLocal('');
                             }
                           }}
-                          className="w-full bg-white border-2 border-gray-100 focus:border-brand-primary rounded-xl px-4 py-2.5 text-sm font-semibold text-brand-dark outline-none transition-colors"
+                          className={`w-full bg-white border-2 rounded-xl px-4 py-2.5 text-sm font-semibold outline-none transition-colors ${
+                            RUCS_EMPRESAS_PROPIAS[formulario.nro_ruc]
+                              ? 'border-red-400 focus:border-red-600 bg-red-50/40 text-red-800 ring-2 ring-red-100'
+                              : 'border-gray-100 focus:border-brand-primary text-brand-dark'
+                          }`}
                         />
 
                         {/* Razón Social detectada en pequeño debajo del RUC */}
-                        {formulario.razon_social && !mostrarCampoManualRazonSocial && (
+                        {formulario.razon_social && !mostrarCampoManualRazonSocial && !RUCS_EMPRESAS_PROPIAS[formulario.nro_ruc] && (
                           <div className="mt-1.5 flex items-center justify-between text-xs text-emerald-800 bg-emerald-50/90 border border-emerald-200 rounded-xl px-3 py-1.5 animate-fade-in">
                             <div className="flex items-center gap-1.5 min-w-0">
                               <Building size={13} className="text-emerald-600 shrink-0" />
@@ -1369,12 +1402,20 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
                           </div>
                         )}
 
-                        {/* Mensaje de aviso de OpenRUC (ej: RUC 10 o error 404) */}
-                        {mensajeRuc && mensajeRuc.tipo !== 'exito' && (
-                          <p className={`text-[10px] sm:text-[11px] font-medium mt-1 leading-tight ${mensajeRuc.tipo === 'advertencia' ? 'text-amber-700' : 'text-red-500'
-                            }`}>
-                            ⚠️ {mensajeRuc.texto}
-                          </p>
+                        {/* Mensaje de aviso de OpenRUC o advertencia de RUC propio */}
+                        {mensajeRuc && (
+                          <div className={`p-2.5 rounded-xl border mt-1.5 text-[11px] font-semibold leading-relaxed animate-fade-in ${
+                            mensajeRuc.tipo === 'error'
+                              ? 'bg-red-50 text-red-700 border-red-200'
+                              : mensajeRuc.tipo === 'advertencia'
+                              ? 'bg-amber-50 text-amber-800 border-amber-200'
+                              : 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                          }`}>
+                            <div className="flex items-start gap-1.5">
+                              <AlertCircle size={14} className="shrink-0 mt-0.5" />
+                              <span>{mensajeRuc.texto}</span>
+                            </div>
+                          </div>
                         )}
                       </div>
 

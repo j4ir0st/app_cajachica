@@ -33,7 +33,8 @@ import {
 import { useUserStore } from '../store/userStore';
 import { useCatalogoStore } from '../store/catalogoStore';
 import { fetchAuth, extraerMensajeError } from '../utils/fetchAuth';
-import { obtenerTipoCaja, extraerIdEmpresa } from '../utils/tipoCaja';
+import { obtenerTipoCaja, extraerIdEmpresa, clasificarTipoCajaAprobacion } from '../utils/tipoCaja';
+import { CLAVES_CATALOGO, leerDeCache, guardarEnCache } from '../utils/catalogoCache';
 import { esArchivoPdf } from '../utils/archivoUtil';
 import { resolverRutaOEntidad } from '../utils/entidades';
 import { esGerenteOperaciones, puedeAccederCierreCaja } from '../utils/permisos';
@@ -110,11 +111,14 @@ const Aprobaciones = () => {
   const [procesandoAccion, setProcesandoAccion] = useState(false);
   const [notificacion, setNotificacion] = useState(null);
 
+  // Catálogo de usuarios en memoria para resolución de empr_id
+  const [usuarios, setUsuarios] = useState(() => leerDeCache(CLAVES_CATALOGO.usuarios) || []);
+
   // Filtros y Búsqueda: Por defecto siempre se muestra lo pendiente de revisión
   const [busqueda, setBusqueda] = useState('');
   const [buscandoRemoto, setBuscandoRemoto] = useState(false);
   const [filtroRevision, setFiltroRevision] = useState('PENDIENTES'); // 'PENDIENTES' | 'REVISADOS'
-  const [filtroTipoCaja, setFiltroTipoCaja] = useState(null); // null | 'A' | 'B' | 'C'
+  const [filtroTipoCaja, setFiltroTipoCaja] = useState(null); // null | 'A' | 'B' | 'C_SGC' | 'C_RRM'
 
   // Estados de conmutación de revisión gerencial
   const [conmutandoId, setConmutandoId] = useState(null);
@@ -175,6 +179,30 @@ const Aprobaciones = () => {
   useEffect(() => {
     cargarSolicitudes();
   }, []);
+
+  // Carga perezosa de usuarios si no están en memoria/caché para la clasificación por empresa
+  useEffect(() => {
+    if (usuarios && usuarios.length > 0) return;
+    const cargarUsuariosRespaldo = async () => {
+      try {
+        const enCache = leerDeCache(CLAVES_CATALOGO.usuarios);
+        if (enCache && enCache.length > 0) {
+          setUsuarios(enCache);
+          return;
+        }
+        const res = await fetchAuth(`${API_URL}/users/?format=json&is_active=true&top=1000`);
+        if (res.ok) {
+          const json = await res.json();
+          const lista = json.results ?? (Array.isArray(json) ? json : []);
+          guardarEnCache(CLAVES_CATALOGO.usuarios, lista);
+          setUsuarios(lista);
+        }
+      } catch (err) {
+        console.warn('[Aprobaciones] No se pudo cargar catálogo de usuarios para clasificación:', err);
+      }
+    };
+    cargarUsuariosRespaldo();
+  }, [usuarios]);
 
   // ============================================================================
   // GESTIÓN DE REVISIÓN GERENCIAL (CAMPO REVISADO / REVISION)
@@ -319,13 +347,13 @@ const Aprobaciones = () => {
     }
 
     if (filtroTipoCaja) {
-      base = base.filter((req) => obtenerTipoCaja(req)?.tipo === filtroTipoCaja);
+      base = base.filter((req) => clasificarTipoCajaAprobacion(req, usuarios)?.tipo === filtroTipoCaja);
     }
 
     return base;
-  }, [solicitudes, busqueda, esGerente, filtroRevision, filtroTipoCaja]);
+  }, [solicitudes, busqueda, esGerente, filtroRevision, filtroTipoCaja, usuarios]);
 
-  // Conteo reactivo por tipo de caja (SURGICORP: A, RRMEDICAL: B, SIN FACTURA: C)
+  // Conteo reactivo por tipo de caja (SURGICORP: A, RRMEDICAL: B, SIN FACTURA SGC: C_SGC, SIN FACTURA RRM: C_RRM)
   const conteoTiposCaja = useMemo(() => {
     let base = solicitudes;
 
@@ -365,10 +393,11 @@ const Aprobaciones = () => {
     const c = {
       A: { count: 0, monto: 0 },
       B: { count: 0, monto: 0 },
-      C: { count: 0, monto: 0 },
+      C_SGC: { count: 0, monto: 0 },
+      C_RRM: { count: 0, monto: 0 },
     };
     for (const req of base) {
-      const t = obtenerTipoCaja(req)?.tipo;
+      const t = clasificarTipoCajaAprobacion(req, usuarios)?.tipo;
       const gasto = parseFloat(req.total_gastado || req.monto_solicitado || 0);
       const monto = isNaN(gasto) ? 0 : gasto;
       if (t && c[t]) {
@@ -377,13 +406,14 @@ const Aprobaciones = () => {
       }
     }
     return c;
-  }, [solicitudes, busqueda, esGerente, filtroRevision]);
+  }, [solicitudes, busqueda, esGerente, filtroRevision, usuarios]);
 
   // Identificador textual del tipo de caja actualmente filtrado
   const etiquetaTipoCajaFiltro = useMemo(() => {
     if (filtroTipoCaja === 'A') return 'Surgicorp';
     if (filtroTipoCaja === 'B') return 'RR Medical';
-    if (filtroTipoCaja === 'C') return 'Sin Factura';
+    if (filtroTipoCaja === 'C_SGC') return 'Sin Factura SGC';
+    if (filtroTipoCaja === 'C_RRM') return 'Sin Factura RRM';
     return '';
   }, [filtroTipoCaja]);
 
@@ -452,7 +482,7 @@ const Aprobaciones = () => {
   const metricasRevision = useMemo(() => {
     // Si hay un filtro por tipo de caja activo, calculamos los KPIs en base a dicho tipo
     const base = filtroTipoCaja
-      ? solicitudes.filter((req) => obtenerTipoCaja(req)?.tipo === filtroTipoCaja)
+      ? solicitudes.filter((req) => clasificarTipoCajaAprobacion(req, usuarios)?.tipo === filtroTipoCaja)
       : solicitudes;
 
     const totalCount = base.length;
@@ -484,24 +514,24 @@ const Aprobaciones = () => {
       faltantesMonto,
       porcentajeRevisado,
     };
-  }, [solicitudes, filtroTipoCaja]);
+  }, [solicitudes, filtroTipoCaja, usuarios]);
 
   const totalMontoAuditoria = useMemo(() => {
     const base = filtroTipoCaja
-      ? solicitudes.filter((req) => obtenerTipoCaja(req)?.tipo === filtroTipoCaja)
+      ? solicitudes.filter((req) => clasificarTipoCajaAprobacion(req, usuarios)?.tipo === filtroTipoCaja)
       : solicitudes;
     return base.reduce((acc, req) => {
       const gasto = parseFloat(req.total_gastado || req.monto_solicitado || 0);
       return acc + (isNaN(gasto) ? 0 : gasto);
     }, 0);
-  }, [solicitudes, filtroTipoCaja]);
+  }, [solicitudes, filtroTipoCaja, usuarios]);
 
   const totalComprobantes = useMemo(() => {
     const base = filtroTipoCaja
-      ? solicitudes.filter((req) => obtenerTipoCaja(req)?.tipo === filtroTipoCaja)
+      ? solicitudes.filter((req) => clasificarTipoCajaAprobacion(req, usuarios)?.tipo === filtroTipoCaja)
       : solicitudes;
     return base.reduce((acc, req) => acc + (req.detalle || req.detalles || []).length, 0);
-  }, [solicitudes, filtroTipoCaja]);
+  }, [solicitudes, filtroTipoCaja, usuarios]);
 
   // ============================================================================
   // ACCIÓN: RECHAZAR / DEVOLVER SOLICITUD (RC)
@@ -919,8 +949,8 @@ const Aprobaciones = () => {
           )}
         </div>
 
-        {/* Botones de Filtro por Tipo de Caja (SURGICORP: Tipo A, RRMEDICAL: Tipo B, SIN FACTURA: Tipo C) */}
-        <div className="flex items-center gap-1.5 shrink-0 bg-brand-light/60 p-1 rounded-xl w-full sm:w-auto justify-center">
+        {/* Botones de Filtro por Tipo de Caja (SURGICORP: Tipo A, RRMEDICAL: Tipo B, SIN FACTURA SGC: C_SGC, SIN FACTURA RRM: C_RRM) */}
+        <div className="flex flex-wrap items-center gap-1.5 shrink-0 bg-brand-light/60 p-1 rounded-xl w-full sm:w-auto justify-center">
           <button
             type="button"
             onClick={() => setFiltroTipoCaja((prev) => (prev === 'A' ? null : 'A'))}
@@ -971,25 +1001,49 @@ const Aprobaciones = () => {
 
           <button
             type="button"
-            onClick={() => setFiltroTipoCaja((prev) => (prev === 'C' ? null : 'C'))}
+            onClick={() => setFiltroTipoCaja((prev) => (prev === 'C_SGC' ? null : 'C_SGC'))}
             className={`px-2.5 py-1.5 rounded-lg text-xs font-black uppercase tracking-wide border transition-all cursor-pointer shadow-2xs flex items-center gap-1.5 ${
-              filtroTipoCaja === 'C'
-                ? 'bg-amber-500 text-white border-amber-500 shadow-xs ring-2 ring-amber-400/40'
-                : 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100/80'
+              filtroTipoCaja === 'C_SGC'
+                ? 'bg-orange-500 text-white border-orange-500 shadow-xs ring-2 ring-orange-400/40'
+                : 'bg-orange-50 text-orange-700 border-orange-200 hover:bg-orange-100/80'
             }`}
             title={
-              filtroTipoCaja === 'C'
-                ? 'Quitar filtro Sin Factura (Tipo C)'
-                : `Filtrar Sin Factura: ${conteoTiposCaja.C.count} reg. • S/ ${conteoTiposCaja.C.monto.toFixed(2)}`
+              filtroTipoCaja === 'C_SGC'
+                ? 'Quitar filtro Sin Factura SGC'
+                : `Filtrar Sin Factura SGC: ${conteoTiposCaja.C_SGC.count} reg. • S/ ${conteoTiposCaja.C_SGC.monto.toFixed(2)}`
             }
           >
-            <span>SIN FACTURA</span>
+            <span>SIN FACTURA SGC</span>
             <span
               className={`text-[10px] px-1.5 py-0.2 rounded-md ${
-                filtroTipoCaja === 'C' ? 'bg-amber-600 text-white' : 'bg-amber-100/90 text-amber-800 font-bold'
+                filtroTipoCaja === 'C_SGC' ? 'bg-orange-600 text-white' : 'bg-orange-100/90 text-orange-800 font-bold'
               }`}
             >
-              {conteoTiposCaja.C.count} • S/ {conteoTiposCaja.C.monto.toFixed(2)}
+              {conteoTiposCaja.C_SGC.count} • S/ {conteoTiposCaja.C_SGC.monto.toFixed(2)}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setFiltroTipoCaja((prev) => (prev === 'C_RRM' ? null : 'C_RRM'))}
+            className={`px-2.5 py-1.5 rounded-lg text-xs font-black uppercase tracking-wide border transition-all cursor-pointer shadow-2xs flex items-center gap-1.5 ${
+              filtroTipoCaja === 'C_RRM'
+                ? 'bg-teal-600 text-white border-teal-600 shadow-xs ring-2 ring-teal-400/40'
+                : 'bg-teal-50 text-teal-700 border-teal-200 hover:bg-teal-100/80'
+            }`}
+            title={
+              filtroTipoCaja === 'C_RRM'
+                ? 'Quitar filtro Sin Factura RRM'
+                : `Filtrar Sin Factura RRM: ${conteoTiposCaja.C_RRM.count} reg. • S/ ${conteoTiposCaja.C_RRM.monto.toFixed(2)}`
+            }
+          >
+            <span>SIN FACTURA RRM</span>
+            <span
+              className={`text-[10px] px-1.5 py-0.2 rounded-md ${
+                filtroTipoCaja === 'C_RRM' ? 'bg-teal-700 text-white' : 'bg-teal-100/90 text-teal-800 font-bold'
+              }`}
+            >
+              {conteoTiposCaja.C_RRM.count} • S/ {conteoTiposCaja.C_RRM.monto.toFixed(2)}
             </span>
           </button>
         </div>
@@ -1053,7 +1107,7 @@ const Aprobaciones = () => {
                       .filter((f) => f && f !== '-' && f !== '—' && f.toLowerCase() !== 'null' && f.toLowerCase() !== 'undefined')
                   )
                 ).join(', ');
-                const tipoCajaInfo = obtenerTipoCaja(req);
+                const tipoCajaInfo = clasificarTipoCajaAprobacion(req, usuarios);
                 const primerSubgasto = obtenerPrimerSubgasto(req);
 
                 return (
@@ -1225,7 +1279,7 @@ const Aprobaciones = () => {
                 const nombreSolicitante = obtenerNombreSolicitante(req.usuario_id);
                 const numComprobantes = (req.detalle || req.detalles || []).length;
                 const tieneFotosCompletas = (req.detalle || req.detalles || []).every((d) => d.adj_cajachica);
-                const tipoCajaInfo = obtenerTipoCaja(req);
+                const tipoCajaInfo = clasificarTipoCajaAprobacion(req, usuarios);
                 const primerSubgasto = obtenerPrimerSubgasto(req);
 
                 return (
@@ -1439,7 +1493,7 @@ const Aprobaciones = () => {
                     Auditoría Requerimiento #{solicitudAuditoria.id}
                   </span>
                   {(() => {
-                    const tipoModal = obtenerTipoCaja(solicitudAuditoria);
+                    const tipoModal = clasificarTipoCajaAprobacion(solicitudAuditoria, usuarios);
                     return (
                       <span className={`text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded-lg border ${tipoModal.claseBadge}`}>
                         {tipoModal.etiqueta}

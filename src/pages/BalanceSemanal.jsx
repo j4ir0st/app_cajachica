@@ -444,8 +444,9 @@ const BalanceSemanal = () => {
     requerimientosSemana.forEach((req) => {
       const listaDet = req.detalle || req.detalles || [];
       listaDet.forEach((det) => {
-        const nombreCat = det.subgasto_id?.tipogasto_id?.nombre || det.subgasto_id?.nombre || (typeof det.subgasto_id === 'string' ? det.subgasto_id : 'Otros Gastos');
         const costo = parseFloat(det.costo || 0);
+        if (isNaN(costo) || costo <= 0) return;
+        const nombreCat = det.subgasto_id?.tipogasto_id?.nombre || det.subgasto_id?.nombre || (typeof det.subgasto_id === 'string' ? det.subgasto_id : 'Otros Gastos');
         mapaCategorias[nombreCat] = (mapaCategorias[nombreCat] || 0) + costo;
         totalGeneral += costo;
       });
@@ -460,7 +461,7 @@ const BalanceSemanal = () => {
       .sort((a, b) => b.monto - a.monto);
   }, [requerimientosSemana]);
 
-  // Desglose multi-tabla por solicitante para el reporte en PDF (solo registros Tipo C)
+  // Desglose multi-tabla por solicitante para el reporte en PDF (solo registros Tipo C con costo mayor a cero)
   const reportePorSolicitante = useMemo(() => {
     if (!requerimientosSemana || requerimientosSemana.length === 0) return [];
 
@@ -473,8 +474,11 @@ const BalanceSemanal = () => {
 
       const listaDet = req.detalle || req.detalles || [];
       if (listaDet.length > 0) {
-        // Filtrar exclusivamente gastos de Tipo C (Sin factura)
-        const detallesTipoC = listaDet.filter((det) => resolverClaveTipoIndividual(det) === 'C');
+        // Filtrar exclusivamente gastos de Tipo C (Sin factura) con importe mayor a cero (ignorar sustentaciones en 0)
+        const detallesTipoC = listaDet.filter((det) => {
+          const costoVal = parseFloat(det.costo || 0);
+          return resolverClaveTipoIndividual(det) === 'C' && !isNaN(costoVal) && costoVal > 0;
+        });
         if (detallesTipoC.length === 0) return;
 
         if (!grupos[clave]) {
@@ -510,9 +514,12 @@ const BalanceSemanal = () => {
           });
         });
       } else {
-        // Si no tiene listaDet anidada, verificar si el requerimiento es Tipo C
+        // Si no tiene listaDet anidada, verificar si el requerimiento es Tipo C con gasto positivo
         const tipoReq = obtenerTipoCaja(req).tipo;
         if (tipoReq !== 'C') return;
+
+        const gastadoReq = parseFloat(req.total_gastado || req.monto_solicitado || 0);
+        if (isNaN(gastadoReq) || gastadoReq <= 0) return;
 
         if (!grupos[clave]) {
           grupos[clave] = {
@@ -525,7 +532,6 @@ const BalanceSemanal = () => {
           };
         }
 
-        const gastadoReq = parseFloat(req.total_gastado || req.monto_solicitado || 0);
         grupos[clave].cantidadSolicitudes += 1;
         grupos[clave].totalGastado += gastadoReq;
         grupos[clave].totalLiquidado += gastadoReq;

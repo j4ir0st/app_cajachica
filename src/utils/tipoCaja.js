@@ -47,6 +47,26 @@ export const MAPA_TIPOS_CAJA = {
     colorHex: '#d97706',
     colorFondo: 'bg-amber-500',
   },
+  C_SGC: {
+    tipo: 'C_SGC',
+    etiqueta: 'SIN FACTURA SGC',
+    etiquetaCabecera: 'Sin Factura SGC',
+    nombreEmpresa: 'SURGICORP S.R.L.',
+    empresaId: 1,
+    claseBadge: 'bg-orange-50 text-orange-700 border-orange-200',
+    colorHex: '#ea580c',
+    colorFondo: 'bg-orange-500',
+  },
+  C_RRM: {
+    tipo: 'C_RRM',
+    etiqueta: 'SIN FACTURA RRM',
+    etiquetaCabecera: 'Sin Factura RRM',
+    nombreEmpresa: 'RR MEDICAL S.R.L.',
+    empresaId: 4,
+    claseBadge: 'bg-teal-50 text-teal-700 border-teal-200',
+    colorHex: '#0d9488',
+    colorFondo: 'bg-teal-500',
+  },
   D: {
     tipo: 'D',
     etiqueta: 'TIPO: D',
@@ -282,5 +302,111 @@ export const obtenerTipoCaja = (reqOId, esDetalle = null) => {
     etiqueta: esDetalleCalculado ? base.etiqueta : base.etiquetaCabecera,
     etiquetaDetalle: base.etiqueta,
     etiquetaGeneral: base.etiquetaCabecera,
+  };
+};
+
+/**
+ * Extrae el nombre de la empresa (empr_id) asociada al usuario solicitante de un requerimiento.
+ * @param {Object} req - Objeto de requerimiento.
+ * @param {Array} [listaUsuarios] - Catálogo opcional de usuarios para resolución por ID.
+ * @returns {string} Nombre normalizado de la empresa (ej: 'SURGICORP S.R.L.', 'RR MEDICAL S.R.L.').
+ */
+export const obtenerEmpresaSolicitante = (req, listaUsuarios = []) => {
+  if (!req) return '';
+
+  // 1. Si viene en el objeto de usuario_id, usuario o created_by
+  const u = req.usuario_id || req.usuario || req.created_by;
+  if (typeof u === 'object' && u !== null) {
+    const empr = u.empr_id || u.empresa || u.empresa_nombre;
+    if (typeof empr === 'string' && empr.trim()) return empr.trim();
+    if (typeof empr === 'object' && empr !== null) {
+      const nombre = empr.empresa || empr.nombre || empr.razon_social;
+      if (nombre) return String(nombre).trim();
+    }
+  }
+
+  // 2. Si viene directamente en la raíz del requerimiento
+  const emprDirecta = req.empr_id || req.empresa_usuario;
+  if (typeof emprDirecta === 'string' && emprDirecta.trim()) return emprDirecta.trim();
+
+  // 3. Si req.usuario_id es un ID numérico o string numérico, buscar en listaUsuarios o en caché local
+  let idNumerico = null;
+  if (typeof u === 'number') {
+    idNumerico = u;
+  } else if (typeof u === 'string') {
+    const match = u.match(/\/(\d+)\/?$/);
+    if (match) idNumerico = parseInt(match[1], 10);
+    else if (/^\d+$/.test(u.trim())) idNumerico = parseInt(u.trim(), 10);
+  }
+
+  if (idNumerico !== null) {
+    if (Array.isArray(listaUsuarios) && listaUsuarios.length > 0) {
+      const encontrado = listaUsuarios.find((item) => item.id === idNumerico);
+      if (encontrado) {
+        const empr = encontrado.empr_id || encontrado.empresa || encontrado.empresa_nombre;
+        if (empr) return String(empr).trim();
+      }
+    }
+
+    try {
+      if (typeof window !== 'undefined') {
+        const clavesCache = ['cc_cache_usuarios_activos_v3', 'cajachica_catalog_usuarios'];
+        for (const clave of clavesCache) {
+          const raw = localStorage.getItem(clave);
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            const arreglo = Array.isArray(parsed) ? parsed : (parsed?.datos || []);
+            if (Array.isArray(arreglo) && arreglo.length > 0) {
+              const encontrado = arreglo.find((item) => item.id === idNumerico);
+              if (encontrado) {
+                const empr = encontrado.empr_id || encontrado.empresa || encontrado.empresa_nombre;
+                if (empr) return String(empr).trim();
+              }
+            }
+          }
+        }
+      }
+    } catch {
+      // Ignorar errores de acceso al almacenamiento local
+    }
+  }
+
+  return '';
+};
+
+/**
+ * Clasifica el requerimiento para la vista de Aprobaciones.
+ * Si el requerimiento es sin factura (Tipo C), lo desglosa según la empresa del solicitante (empr_id):
+ * - Si empr_id = 'RR MEDICAL S.R.L.' -> 'C_RRM' (SIN FACTURA RRM - Verde azulado / Teal)
+ * - Si empr_id = 'SURGICORP S.R.L.' (o por defecto) -> 'C_SGC' (SIN FACTURA SGC - Anaranjado)
+ * @param {Object} req - Objeto de requerimiento.
+ * @param {Array} [listaUsuarios] - Catálogo opcional de usuarios.
+ * @returns {Object} Objeto con propiedades visuales y etiquetas del tipo de caja.
+ */
+export const clasificarTipoCajaAprobacion = (req, listaUsuarios = []) => {
+  const tipoBase = obtenerTipoCaja(req);
+  if (!tipoBase || tipoBase.tipo !== 'C') {
+    return tipoBase;
+  }
+
+  const empr = obtenerEmpresaSolicitante(req, listaUsuarios).toUpperCase();
+  const esRRM = empr.includes('RR MEDICAL') || empr.includes('RR_MEDICAL') || empr.includes('R.R.');
+
+  if (esRRM) {
+    const configRRM = MAPA_TIPOS_CAJA.C_RRM;
+    return {
+      ...configRRM,
+      etiqueta: 'SIN FACTURA RRM',
+      etiquetaCabecera: 'Sin Factura RRM',
+      nombreEmpresa: 'RR MEDICAL S.R.L.',
+    };
+  }
+
+  const configSGC = MAPA_TIPOS_CAJA.C_SGC;
+  return {
+    ...configSGC,
+    etiqueta: 'SIN FACTURA SGC',
+    etiquetaCabecera: 'Sin Factura SGC',
+    nombreEmpresa: 'SURGICORP S.R.L.',
   };
 };

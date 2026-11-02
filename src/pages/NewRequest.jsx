@@ -282,6 +282,12 @@ const validarParaLiquidacion = (cabecera, detalles, montoFinal, totalGastos) => 
       return `El gasto #${nro} está marcado para Provincia pero no tiene provincia seleccionada.`;
     }
 
+    const rucLimpio = String(d.nro_ruc || '').trim();
+    if (rucLimpio === '20516920123' || rucLimpio === '20522608417') {
+      const nombreEmpresa = rucLimpio === '20516920123' ? 'SURGICORP S.R.L.' : 'RR MEDICAL S.R.L.';
+      return `El comprobante #${nro} tiene registrado el RUC ${rucLimpio} de ${nombreEmpresa}. Recuerde que en el campo "Factura a Nombre De" se indica a quién se emite la factura, pero en el RUC debe colocar el del negocio donde se realizó la compra.`;
+    }
+
     if (subgastoExigeAdjunto(d) && !d.adj_cajachica) {
       const nombreSub = d.subgasto_obj?.nombre || d.detalle || 'Gasto';
       return `El comprobante #${nro} (${nombreSub}) requiere adjuntar el comprobante o foto obligatoria para liquidar.`;
