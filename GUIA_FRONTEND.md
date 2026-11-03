@@ -191,6 +191,11 @@ El modelo `RC_SubGasto` contiene banderas booleanas que le indican al Frontend *
 | **Listar Cierres (Paginado)** | `GET` | `/RC_SaldoSemanal/` | `?page=1&top=10&ordering=-fecha_fin` (Filtros: `codigo_cierre`, `fecha_inicio`, `fecha_fin`) |
 | **Obtener Cierre** | `GET` | `/RC_SaldoSemanal/<ID>/` | — |
 | **Cierre Atómico de Caja** | `POST` | `/RC_SaldoSemanal/` o `/RC_SaldoSemanal/cerrar-caja/` | `application/json` (Datos de saldo + campo `requerimientos`) |
+| **Exportar Reporte Excel** | `GET` | `/RC_SaldoSemanal/<ID>/exportar_excel/` | Descarga archivo Excel (.xlsx) con hojas clasificadas por Tipo de Caja |
+| **Exportar Reporte PDF** | `GET` | `/RC_SaldoSemanal/<ID>/exportar_pdf/` | Descarga / visor PDF de balance semanal (`?disposition=inline` opcional) |
+| **Enviar Reporte por Correo** | `GET` o `POST` | `/RC_SaldoSemanal/<ID>/enviar_correo/` (o `enviar-correo/`) | Enviar correo automático desde `jausejo@surgicorperu.com` a `jdcastillo@surgicorperu.com` (CC `jcabanillas@surgicorperu.com`) con adjuntos Excel y PDF |
+| **Revertir Cierre Semanal** | `POST` o `DELETE` | `/RC_SaldoSemanal/<ID>/revertir-cierre/` (o `DELETE /RC_SaldoSemanal/<ID>/`) | Solo Gerente de Operaciones o Superusuarios (`is_superuser=true`). Reasigna requerimientos a estado `'LQ'`, `revisado=false`, `saldo_semanal=null` y elimina el cierre. |
+
 
 > [!TIP]
 > **Paginación e Infinite Scroll para Balance Semanal (`top=10`, máximo `top=1000`):**
@@ -521,6 +526,12 @@ export const cajaChicaService = {
 
   cerrarCajaSemanal: async (data: any) => {
     const response = await api.post('/RC_SaldoSemanal/', data);
+    return response.data;
+  },
+
+  // Envío de Correo Automático de Cierre Semanal
+  enviarCorreoSaldo: async (id: number, params?: { destinatarios?: string[]; cc?: string[]; asunto?: string }) => {
+    const response = await api.get(`/RC_SaldoSemanal/${id}/enviar_correo/`, { params });
     return response.data;
   },
 };

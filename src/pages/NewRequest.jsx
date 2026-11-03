@@ -58,16 +58,19 @@ const extraerId = (idOUri) => {
  * Mapea la cabecera recibida en modo edición al estado local del formulario.
  */
 const mapearCabeceraExistente = (req) => {
-  const usuarioObj = typeof req.usuario_id === 'object' ? req.usuario_id : null;
-  const usuarioId = usuarioObj?.id || req.usuario_id;
+  if (!req) return cabeceraInicial;
+  const usuarioObj = (req.usuario_id && typeof req.usuario_id === 'object') ? req.usuario_id : null;
+  const usuarioId = usuarioObj?.id || (typeof req.usuario_id === 'number' || typeof req.usuario_id === 'string' ? req.usuario_id : null);
   const usuarioUrl = usuarioObj?.url || (usuarioId ? `${API_URL}/Usuario/${usuarioId}/` : null);
   const usuarioNombre = usuarioObj?.full_name || usuarioObj?.username || req.created_by || '';
 
-  const areaId = typeof req.area_id === 'object' ? req.area_id.id : (req.area_id || req.area || null);
-  const areaUrl = typeof req.area_id === 'object' ? req.area_id.url : null;
-  const areaNombre = (typeof req.area_id === 'object' && req.area_id?.nombre)
-    ? req.area_id.nombre
-    : (req.area || (req.area_id && isNaN(Number(req.area_id)) ? req.area_id : ''));
+  const areaObj = (req.area_id && typeof req.area_id === 'object') ? req.area_id : null;
+  const areaId = areaObj?.id || (req.area_id && typeof req.area_id !== 'object' ? req.area_id : (req.area || null));
+  const areaUrl = areaObj?.url || null;
+  const areaNombre = areaObj?.nombre || (typeof req.area === 'string' ? req.area : (req.area_id && isNaN(Number(req.area_id)) ? req.area_id : ''));
+
+  const empresaObj = (req.empresa_id && typeof req.empresa_id === 'object') ? req.empresa_id : null;
+  const empresaId = empresaObj?.id || (req.empresa_id !== undefined && req.empresa_id !== null && typeof req.empresa_id !== 'object' ? req.empresa_id : null);
 
   return {
     id: req.id || extraerId(req.url),
@@ -81,7 +84,7 @@ const mapearCabeceraExistente = (req) => {
     monto_solicitado: req.monto_solicitado || '',
     obs: req.obs || '',
     fecha_solicitud: req.fecha_solicitud ? req.fecha_solicitud.slice(0, 16) : '',
-    empresa_id: req.empresa_id !== undefined ? (typeof req.empresa_id === 'object' ? req.empresa_id?.id : req.empresa_id) : null,
+    empresa_id: empresaId,
   };
 };
 
@@ -98,6 +101,14 @@ const extraerProvinciaUrl = (prov) => {
   if (typeof prov === 'object') return prov.url || (prov.id ? `${API_URL}/RC_Provincia/${prov.id}/` : null);
   if (typeof prov === 'string') return prov.startsWith('http') ? prov : `${API_URL}/RC_Provincia/${extraerId(prov) || prov}/`;
   if (typeof prov === 'number') return `${API_URL}/RC_Provincia/${prov}/`;
+  return null;
+};
+
+const extraerTipogastoUrl = (tipo) => {
+  if (!tipo) return null;
+  if (typeof tipo === 'object') return tipo.url || (tipo.id ? `${API_URL}/RC_TipoGasto/${tipo.id}/` : null);
+  if (typeof tipo === 'string') return tipo.startsWith('http') ? tipo : `${API_URL}/RC_TipoGasto/${extraerId(tipo) || tipo}/`;
+  if (typeof tipo === 'number') return `${API_URL}/RC_TipoGasto/${tipo}/`;
   return null;
 };
 
@@ -186,11 +197,11 @@ const mapearDetallesExistentes = (detallesLista) => {
   if (!Array.isArray(detallesLista)) return [];
   return detallesLista.map((d) => {
     const idNum = d.id || extraerId(d.url);
-    const subgastoObj = typeof d.subgasto_id === 'object' ? d.subgasto_id : null;
+    const subgastoObj = (d.subgasto_id && typeof d.subgasto_id === 'object') ? d.subgasto_id : null;
     const subgastoUrl = extraerSubgastoUrl(d.subgasto_id) || (subgastoObj?.id ? `${API_URL}/RC_SubGasto/${subgastoObj.id}/` : null);
-    const tipogastoUrl = subgastoObj?.tipogasto_id?.url || (subgastoObj?.tipogasto_id?.id ? `${API_URL}/RC_TipoGasto/${subgastoObj.tipogasto_id.id}/` : null);
+    const tipogastoUrl = extraerTipogastoUrl(d.tipogasto_id) || extraerTipogastoUrl(subgastoObj?.tipogasto_id) || null;
 
-    const placaId = d.placa_detalle?.id || (typeof d.placa_id === 'object' ? d.placa_id?.id : extraerPlacaId(d.placa_id)) || null;
+    const placaId = d.placa_detalle?.id || (d.placa_id && typeof d.placa_id === 'object' ? d.placa_id.id : extraerPlacaId(d.placa_id)) || null;
     const placaTexto = d.placa || d.placa_detalle?.placa || d.placa_nombre || '';
     const placaNombre = d.placa_nombre || (d.placa_detalle?.chofer ? `${d.placa_detalle.placa} - ${d.placa_detalle.chofer}` : placaTexto);
 
@@ -411,6 +422,15 @@ const NewRequest = () => {
           fecha_solicitud: cabecera.fecha_solicitud,
           empresa_id: cabecera.empresa_id || null,
         };
+        if (cabecera.usuario_id) {
+          cabeceraPayload.usuario_id = cabecera.usuario_url || `${API_URL}/users/${cabecera.usuario_id}/`;
+        }
+        if (cabecera.area_id) {
+          const areaNum = typeof cabecera.area_id === 'number' || /^\d+$/.test(cabecera.area_id) ? Number(cabecera.area_id) : null;
+          if (areaNum) {
+            cabeceraPayload.area_id = cabecera.area_url || `${API_URL}/EU_Area/${areaNum}/`;
+          }
+        }
 
         const resRequerimiento = await fetchAuth(
           `${API_URL}/Requerimiento_CajaChica/${idReqExistente}/?format=json`,
@@ -699,7 +719,8 @@ const NewRequest = () => {
           ? '¡Rendición de caja chica liquidada y enviada con éxito!'
           : 'Se guardó su requerimiento como Pendiente (Borrador). Puede continuar llenándolo en Mis Solicitudes.';
 
-      navigate('/mis-solicitudes', { state: { exito: mensaje } });
+      const rutaDestino = location.state?.desdeRuta || '/mis-solicitudes';
+      navigate(rutaDestino, { state: { exito: mensaje } });
     } catch (err) {
       setNotificacion({
         tipo: 'error',
@@ -737,7 +758,7 @@ const NewRequest = () => {
             </p>
           </div>
           <button
-            onClick={() => navigate(-1)}
+            onClick={() => navigate(location.state?.desdeRuta ? location.state.desdeRuta : -1)}
             className="p-2 rounded-2xl text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors"
           >
             <X size={20} />
@@ -779,7 +800,7 @@ const NewRequest = () => {
           {/* Barra de navegación inferior (Footer Fijo) */}
           <div className="flex items-center justify-between py-2 px-4 md:px-8 border-t border-gray-100 shrink-0 bg-white">
             <button
-              onClick={pasoActual === 1 ? () => navigate(-1) : irAnterior}
+              onClick={pasoActual === 1 ? () => navigate(location.state?.desdeRuta ? location.state.desdeRuta : -1) : irAnterior}
               className="flex items-center gap-1.5 px-4 py-2 rounded-xl border-2 border-gray-200 text-xs sm:text-sm font-bold text-gray-500 hover:bg-gray-50 hover:border-gray-300 transition-all"
             >
               <ArrowLeft size={15} />

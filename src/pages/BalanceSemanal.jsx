@@ -27,7 +27,10 @@ import {
   MapPin,
   ShieldCheck,
   Mail,
-  Send
+  Send,
+  Edit2,
+  RotateCcw,
+  AlertTriangle
 } from 'lucide-react';
 import { useUserStore } from '../store/userStore';
 import { useCatalogoStore } from '../store/catalogoStore';
@@ -35,7 +38,7 @@ import { fetchAuth, extraerMensajeError } from '../utils/fetchAuth';
 import { obtenerTipoCaja, resolverClaveTipoIndividual } from '../utils/tipoCaja';
 import { esArchivoPdf } from '../utils/archivoUtil';
 import { resolverRutaOEntidad, esGastoTipoTaxi } from '../utils/entidades';
-import { puedeAccederBalanceSemanal } from '../utils/permisos';
+import { puedeAccederBalanceSemanal, esGerenteOperaciones, esSuperusuario } from '../utils/permisos';
 import ModalVisorComprobante from '../components/ModalVisorComprobante';
 import Toast from '../components/Toast';
 
@@ -83,6 +86,11 @@ const BalanceSemanal = () => {
   const { user } = useUserStore();
   const { entidades } = useCatalogoStore();
 
+  // Permiso para editar requerimientos en balance semanal (solo Gerente de Operaciones y Superusuarios)
+  const puedeEditarRequerimientos = useMemo(() => {
+    return esGerenteOperaciones(user) || esSuperusuario(user);
+  }, [user]);
+
   // Protección estricta: Solo Gerencias (Operaciones o Finanzas) y Superusuario
   useEffect(() => {
     if (user && !puedeAccederBalanceSemanal(user)) {
@@ -119,6 +127,8 @@ const BalanceSemanal = () => {
   const [descargandoPdf, setDescargandoPdf] = useState(false);
   const [mostrarModalCorreo, setMostrarModalCorreo] = useState(false);
   const [enviandoCorreo, setEnviandoCorreo] = useState(false);
+  const [mostrarModalRevertir, setMostrarModalRevertir] = useState(false);
+  const [revirtiendoCierre, setRevirtiendoCierre] = useState(false);
   const [correoDestinatarios, setCorreoDestinatarios] = useState('jdcastillo@surgicorperu.com');
   const [correoMensaje, setCorreoMensaje] = useState(
     'Estimada Jessica,\n\nAdjunto el reporte de cierre semanal de Caja Chica con el desglose en Excel y PDF correspondiente para su respectiva revisión y trámite de reembolso.\n\nSaludos cordiales.'
@@ -326,6 +336,110 @@ const BalanceSemanal = () => {
       cargarDetallesRemotos();
     }
   }, [solicitudDetalle]);
+
+  // ============================================================================
+  // GESTIÓN DE EDICIÓN DE REQUERIMIENTOS (GERENTE DE OPERACIONES / SUPERUSUARIOS)
+  // ============================================================================
+
+  const manejarEditarRequerimiento = async (req) => {
+    if (!puedeEditarRequerimientos || !req) return;
+
+    // Si ya tiene los comprobantes completos en memoria como array de objetos
+    const detallesExistentes = req.detalle || req.detalles;
+    if (
+      Array.isArray(detallesExistentes) &&
+      detallesExistentes.length > 0 &&
+      typeof detallesExistentes[0] === 'object'
+    ) {
+      navigate('/nueva-solicitud', { state: { requerimientoAEditar: req, desdeRuta: '/balance' } });
+      return;
+    }
+
+    // Si solo tiene IDs o URLs, obtener el requerimiento completo con sus comprobantes
+    try {
+      const resReq = await fetchAuth(`${API_URL}/Requerimiento_CajaChica/${req.id}/?format=json`);
+      if (resReq.ok) {
+        const dataReq = await resReq.json();
+        const itemsReq = dataReq.detalle || dataReq.detalles;
+        if (Array.isArray(itemsReq) && itemsReq.length > 0 && typeof itemsReq[0] === 'object') {
+          navigate('/nueva-solicitud', { state: { requerimientoAEditar: dataReq, desdeRuta: '/balance' } });
+          return;
+        }
+      }
+
+      // Fallback complementario desde RC_Detalle
+      const resDet = await fetchAuth(`${API_URL}/RC_Detalle/?requerimiento_id=${req.id}&format=json`);
+      if (resDet.ok) {
+        const dataDet = await resDet.json();
+        const listaDet = dataDet.results ?? (Array.isArray(dataDet) ? dataDet : []);
+        const reqConDetalles = {
+          ...req,
+          detalle: listaDet,
+          detalles: listaDet,
+        };
+        navigate('/nueva-solicitud', { state: { requerimientoAEditar: reqConDetalles, desdeRuta: '/balance' } });
+        return;
+      }
+
+      navigate('/nueva-solicitud', { state: { requerimientoAEditar: req, desdeRuta: '/balance' } });
+    } catch (err) {
+      console.error(`[BalanceSemanal] Error al obtener detalles del requerimiento #${req.id} para edición:`, err);
+      navigate('/nueva-solicitud', { state: { requerimientoAEditar: req, desdeRuta: '/balance' } });
+    }
+  };
+
+  // ============================================================================
+  // REVERSIÓN DE CIERRE SEMANAL (GERENTE DE OPERACIONES / SUPERUSUARIOS)
+  // ============================================================================
+
+  const ejecutarRevertirCierre = async () => {
+    if (!semanaSeleccionada || revirtiendoCierre) return;
+    setRevirtiendoCierre(true);
+    try {
+      const idSaldo = semanaSeleccionada.id;
+      const codigoSemana = semanaSeleccionada.codigo_cierre || `#${idSaldo}`;
+
+      // 1. Intentar endpoint dedicado del backend: POST /RC_SaldoSemanal/<ID>/revertir-cierre/
+      let res = await fetchAuth(`${API_URL}/RC_SaldoSemanal/${idSaldo}/revertir-cierre/?format=json`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+
+      // 2. Fallback complementario: DELETE /RC_SaldoSemanal/<ID>/ si responde 404 o 405
+      if (!res.ok && (res.status === 404 || res.status === 405)) {
+        res = await fetchAuth(`${API_URL}/RC_SaldoSemanal/${idSaldo}/?format=json`, {
+          method: 'DELETE',
+        });
+      }
+
+      if (!res.ok) {
+        const errorDetallado = await extraerMensajeError(res);
+        throw new Error(errorDetallado);
+      }
+
+      setNotificacion({
+        tipo: 'exito',
+        titulo: 'Cierre Semanal Revertido',
+        mensaje: `Se eliminó el registro de saldo ${codigoSemana} y los requerimientos quedaron liberados en estado Liquidado (LQ).`,
+      });
+
+      setMostrarModalRevertir(false);
+      setSemanaSeleccionada(null);
+      setRequerimientosSemana([]);
+
+      // Recargar lista de saldos semanales
+      await cargarSaldosSemanales();
+    } catch (err) {
+      console.error('[BalanceSemanal] ❌ Error al revertir cierre semanal:', err);
+      setNotificacion({
+        tipo: 'error',
+        titulo: 'Error al Revertir Cierre',
+        mensaje: err.message || 'No se pudo revertir el cierre semanal en el servidor.',
+      });
+    } finally {
+      setRevirtiendoCierre(false);
+    }
+  };
 
   // ============================================================================
   // FILTRADO DE SEMANAS Y REQUERIMIENTOS
@@ -1062,11 +1176,10 @@ const BalanceSemanal = () => {
             <button
               key={m.clave}
               onClick={() => setMesFiltro(m.clave)}
-              className={`px-3 py-1 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all whitespace-nowrap ${
-                mesFiltro === m.clave
+              className={`px-3 py-1 rounded-xl text-[10px] font-black uppercase tracking-wider transition-all whitespace-nowrap ${mesFiltro === m.clave
                   ? 'bg-brand-primary text-white shadow-sm shadow-brand-primary/20'
                   : 'bg-gray-50 text-gray-500 hover:bg-gray-100'
-              }`}
+                }`}
             >
               {m.etiqueta}
             </button>
@@ -1099,11 +1212,10 @@ const BalanceSemanal = () => {
                   <div
                     key={sem.id}
                     onClick={() => setSemanaSeleccionada(sem)}
-                    className={`p-3 rounded-2xl border cursor-pointer transition-all flex flex-col gap-2 ${
-                      seleccionada
+                    className={`p-3 rounded-2xl border cursor-pointer transition-all flex flex-col gap-2 ${seleccionada
                         ? 'bg-brand-primary text-white border-brand-primary shadow-md shadow-brand-primary/20 scale-[1.01]'
                         : 'bg-white hover:bg-gray-50 border-gray-100 text-brand-dark'
-                    }`}
+                      }`}
                   >
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-1.5">
@@ -1114,9 +1226,8 @@ const BalanceSemanal = () => {
                             setSemanaSeleccionada(sem);
                             setMostrarPopupRequerimientos(true);
                           }}
-                          className={`text-xs font-black px-2 py-0.5 rounded-lg transition-all hover:scale-105 active:scale-95 flex items-center gap-1 group/cod ${
-                            seleccionada ? 'bg-white/20 text-white hover:bg-white/30' : 'bg-brand-light text-brand-dark hover:bg-brand-primary/10 hover:text-brand-primary'
-                          }`}
+                          className={`text-xs font-black px-2 py-0.5 rounded-lg transition-all hover:scale-105 active:scale-95 flex items-center gap-1 group/cod ${seleccionada ? 'bg-white/20 text-white hover:bg-white/30' : 'bg-brand-light text-brand-dark hover:bg-brand-primary/10 hover:text-brand-primary'
+                            }`}
                           title="Ver requerimientos de este cierre"
                         >
                           <span>{sem.codigo_cierre || `Cierre #${sem.id}`}</span>
@@ -1129,9 +1240,8 @@ const BalanceSemanal = () => {
                             e.stopPropagation();
                             manejarDescargarExcel(sem);
                           }}
-                          className={`p-1 rounded-md transition-all hover:scale-110 active:scale-95 ${
-                            seleccionada ? 'text-white/80 hover:text-white hover:bg-white/20' : 'text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50'
-                          }`}
+                          className={`p-1 rounded-md transition-all hover:scale-110 active:scale-95 ${seleccionada ? 'text-white/80 hover:text-white hover:bg-white/20' : 'text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50'
+                            }`}
                           title={`Exportar Excel de ${sem.codigo_cierre || `Cierre #${sem.id}`}`}
                         >
                           <FileSpreadsheet size={13} />
@@ -1143,9 +1253,8 @@ const BalanceSemanal = () => {
                             e.stopPropagation();
                             manejarGuardarPDF(sem);
                           }}
-                          className={`p-1 rounded-md transition-all hover:scale-110 active:scale-95 ${
-                            seleccionada ? 'text-white/80 hover:text-white hover:bg-white/20' : 'text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50'
-                          }`}
+                          className={`p-1 rounded-md transition-all hover:scale-110 active:scale-95 ${seleccionada ? 'text-white/80 hover:text-white hover:bg-white/20' : 'text-indigo-600 hover:text-indigo-700 hover:bg-indigo-50'
+                            }`}
                           title={`Exportar PDF de ${sem.codigo_cierre || `Cierre #${sem.id}`}`}
                         >
                           <Download size={13} />
@@ -1172,9 +1281,8 @@ const BalanceSemanal = () => {
                       </div>
                       <div className="w-full h-1.5 rounded-full bg-black/10 overflow-hidden">
                         <div
-                          className={`h-full rounded-full transition-all ${
-                            seleccionada ? 'bg-white' : pct > 80 ? 'bg-red-500' : 'bg-brand-primary'
-                          }`}
+                          className={`h-full rounded-full transition-all ${seleccionada ? 'bg-white' : pct > 80 ? 'bg-red-500' : 'bg-brand-primary'
+                            }`}
                           style={{ width: `${Math.min(pct, 100)}%` }}
                         />
                       </div>
@@ -1223,10 +1331,24 @@ const BalanceSemanal = () => {
                     </h3>
                   </div>
 
-                  <span className="text-xs font-black text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-xl border border-emerald-200 flex items-center gap-1">
-                    <ShieldCheck size={13} />
-                    Cerrado
-                  </span>
+                  <div className="flex items-center gap-2">
+                    {puedeEditarRequerimientos && (
+                      <button
+                        type="button"
+                        onClick={() => setMostrarModalRevertir(true)}
+                        className="px-2.5 py-1 bg-rose-50 hover:bg-rose-100 border border-rose-200 hover:border-rose-300 text-rose-700 hover:text-rose-800 rounded-xl text-xs font-black transition-all flex items-center gap-1.5 shadow-2xs cursor-pointer active:scale-95"
+                        title="Revertir este cierre de caja y liberar los requerimientos a estado Liquidado (LQ)"
+                      >
+                        <RotateCcw size={12} className="shrink-0" />
+                        <span>Revertir Cierre</span>
+                      </button>
+                    )}
+
+                    <span className="text-xs font-black text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-xl border border-emerald-200 flex items-center gap-1">
+                      <ShieldCheck size={13} />
+                      Cerrado
+                    </span>
+                  </div>
                 </div>
 
                 {/* Grid de 4 Indicadores Financieros */}
@@ -1340,15 +1462,27 @@ const BalanceSemanal = () => {
                             </div>
                           </div>
 
-                          <div className="flex items-center gap-3 shrink-0">
+                          <div className="flex items-center gap-2 sm:gap-2.5 shrink-0">
                             <span className="text-xs font-black text-brand-dark">
                               S/ {totalGast.toFixed(2)}
                             </span>
 
+                            {puedeEditarRequerimientos && (
+                              <button
+                                type="button"
+                                onClick={() => manejarEditarRequerimiento(req)}
+                                className="p-1.5 bg-amber-50 hover:bg-amber-100 border border-amber-200 hover:border-amber-300 text-amber-700 hover:text-amber-800 rounded-lg transition-all cursor-pointer shadow-2xs flex items-center gap-1"
+                                title="Editar requerimiento (Errores de registro)"
+                              >
+                                <Edit2 size={13} />
+                                <span className="hidden xl:inline text-[10px] font-bold">Editar</span>
+                              </button>
+                            )}
+
                             <button
                               type="button"
                               onClick={() => setSolicitudDetalle(req)}
-                              className="p-1.5 bg-white border border-gray-200 hover:border-brand-primary text-gray-600 hover:text-brand-primary rounded-lg transition-colors"
+                              className="p-1.5 bg-white border border-gray-200 hover:border-brand-primary text-gray-600 hover:text-brand-primary rounded-lg transition-colors cursor-pointer"
                               title="Ver detalle y fotos"
                             >
                               <Eye size={13} />
@@ -1795,17 +1929,34 @@ const BalanceSemanal = () => {
                         </div>
                       </div>
 
-                      <div className="flex items-center gap-2.5 shrink-0">
+                      <div className="flex items-center gap-2 shrink-0">
                         <span className="text-xs font-black text-brand-dark">
                           S/ {totalGast.toFixed(2)}
                         </span>
+
+                        {puedeEditarRequerimientos && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setMostrarPopupRequerimientos(false);
+                              manejarEditarRequerimiento(req);
+                            }}
+                            className="p-1.5 bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-700 hover:text-amber-800 rounded-lg transition-all cursor-pointer shadow-2xs flex items-center gap-1"
+                            title="Editar requerimiento (Errores de registro)"
+                          >
+                            <Edit2 size={13} />
+                            <span className="text-[10px] font-bold">Editar</span>
+                          </button>
+                        )}
+
                         <button
                           type="button"
                           onClick={(e) => {
                             e.stopPropagation();
                             setSolicitudDetalle(req);
                           }}
-                          className="p-1.5 bg-white border border-gray-200 group-hover:border-brand-primary text-gray-600 group-hover:text-brand-primary rounded-lg transition-colors"
+                          className="p-1.5 bg-white border border-gray-200 group-hover:border-brand-primary text-gray-600 group-hover:text-brand-primary rounded-lg transition-colors cursor-pointer"
                           title="Ver detalle y fotos de comprobantes"
                         >
                           <Eye size={13} />
@@ -1829,6 +1980,134 @@ const BalanceSemanal = () => {
                 className="px-4 py-1.5 rounded-xl border border-gray-200 text-xs font-bold text-gray-600 hover:bg-white transition-all"
               >
                 Cerrar
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* ========================================================================
+          MODAL POPUP PARA REVERTIR CIERRE SEMANAL (GERENTE DE OPERACIONES / SUPERUSUARIO)
+         ======================================================================== */}
+      {mostrarModalRevertir && semanaSeleccionada && createPortal(
+        <div
+          className="fixed inset-0 !m-0 z-50 flex items-center justify-center bg-brand-dark/70 backdrop-blur-sm p-3 sm:p-4 overflow-y-auto animate-fade-in"
+          onClick={() => {
+            if (!revirtiendoCierre) setMostrarModalRevertir(false);
+          }}
+        >
+          <div
+            className="bg-white rounded-3xl w-full max-w-lg shadow-2xl border border-gray-100 flex flex-col max-h-[90vh] overflow-hidden animate-scale-up"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Cabecera del Popup */}
+            <div className="px-5 py-4 bg-rose-50/80 border-b border-rose-100 flex items-center justify-between shrink-0">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-2xl bg-rose-100 border border-rose-200 text-rose-600 flex items-center justify-center shrink-0">
+                  <RotateCcw size={18} />
+                </div>
+                <div>
+                  <h3 className="text-sm font-black text-brand-dark">Revertir Cierre Semanal</h3>
+                  <p className="text-[11px] font-semibold text-rose-700">
+                    {semanaSeleccionada.codigo_cierre || `Cierre #${semanaSeleccionada.id}`} ({formatearFechaCorta(semanaSeleccionada.fecha_inicio)} - {formatearFechaCorta(semanaSeleccionada.fecha_fin)})
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                disabled={revirtiendoCierre}
+                onClick={() => setMostrarModalRevertir(false)}
+                className="p-1.5 rounded-xl text-gray-400 hover:text-gray-600 hover:bg-white/80 transition-colors cursor-pointer"
+                title="Cerrar ventana"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {/* Resumen explicativo de la acción */}
+            <div className="p-5 overflow-y-auto space-y-3.5 flex-1 text-xs">
+              <div className="p-3 bg-amber-50 rounded-2xl border border-amber-200/80 flex items-start gap-2.5 text-amber-900">
+                <AlertTriangle size={18} className="text-amber-600 shrink-0 mt-0.5" />
+                <div className="space-y-1">
+                  <p className="font-bold">
+                    ¿Está seguro de revertir este cierre de caja semanal?
+                  </p>
+                  <p className="text-[11px] text-amber-800 leading-relaxed">
+                    Se <strong className="text-amber-950">eliminará el registro de saldo semanal</strong> y se liberarán los siguientes <strong className="text-amber-950">{requerimientosSemana.length} requerimiento(s)</strong>, revirtiéndolos a estado <strong>Liquidado (LQ)</strong> para que puedan ser editados o incluidos nuevamente en un futuro balance.
+                  </p>
+                </div>
+              </div>
+
+              {/* Listado de Requerimientos a Liberar */}
+              <div>
+                <div className="flex items-center justify-between mb-1.5 px-1">
+                  <span className="text-[10px] font-black uppercase tracking-wider text-gray-400">
+                    Registros que volverán a estado Liquidado (LQ):
+                  </span>
+                  <span className="text-[10px] font-bold text-brand-primary">
+                    {requerimientosSemana.length} registros
+                  </span>
+                </div>
+
+                <div className="max-h-48 overflow-y-auto border border-gray-100 rounded-2xl p-2 bg-gray-50/60 divide-y divide-gray-100">
+                  {requerimientosSemana.length === 0 ? (
+                    <p className="text-center py-3 text-gray-400 text-[11px] font-medium">
+                      No hay requerimientos asociados a este cierre.
+                    </p>
+                  ) : (
+                    requerimientosSemana.map((req) => {
+                      const reqId = typeof req === 'object' ? req.id : req;
+                      const solicitante = typeof req === 'object' ? obtenerNombreSolicitante(req.usuario_id) : '—';
+                      const fecha = typeof req === 'object' && req.fecha_solicitud ? formatearFechaCorta(req.fecha_solicitud) : '';
+                      const totalGasto = typeof req === 'object' ? parseFloat(req.total_gastado || req.monto_solicitado || 0) : 0;
+
+                      return (
+                        <div key={reqId} className="py-1.5 px-2 flex items-center justify-between text-xs hover:bg-white rounded-lg transition-colors">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className="font-black text-brand-dark shrink-0">#{reqId}</span>
+                            <span className="text-gray-600 truncate font-semibold">{solicitante}</span>
+                            {fecha && <span className="text-[10px] text-gray-400 hidden sm:inline">({fecha})</span>}
+                          </div>
+                          <span className="font-bold text-brand-dark shrink-0 ml-2">
+                            S/ {totalGasto.toFixed(2)}
+                          </span>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Footer con 2 Botones: Cancelar y Aceptar */}
+            <div className="px-5 py-3.5 bg-gray-50 border-t border-gray-100 flex items-center justify-end gap-2.5 shrink-0">
+              <button
+                type="button"
+                disabled={revirtiendoCierre}
+                onClick={() => setMostrarModalRevertir(false)}
+                className="px-4 py-2 rounded-xl border border-gray-200 text-xs font-bold text-gray-600 hover:bg-white hover:text-gray-800 transition-all cursor-pointer disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+
+              <button
+                type="button"
+                disabled={revirtiendoCierre}
+                onClick={ejecutarRevertirCierre}
+                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-black shadow-md shadow-rose-600/20 hover:scale-[1.02] active:scale-95 transition-all cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
+              >
+                {revirtiendoCierre ? (
+                  <>
+                    <RefreshCw size={13} className="animate-spin" />
+                    <span>Revirtiendo...</span>
+                  </>
+                ) : (
+                  <>
+                    <RotateCcw size={13} />
+                    <span>Aceptar y Revertir Cierre</span>
+                  </>
+                )}
               </button>
             </div>
           </div>
@@ -1865,14 +2144,35 @@ const BalanceSemanal = () => {
                 </div>
                 <h3 className="text-sm font-black text-brand-dark">Comprobantes Adjuntos</h3>
               </div>
-              <button
-                type="button"
-                onClick={() => setSolicitudDetalle(null)}
-                className="p-1.5 rounded-xl text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
-                title="Cerrar modal"
-              >
-                <X size={18} />
-              </button>
+              <div className="flex items-center gap-2">
+                {puedeEditarRequerimientos && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const reqParaEditar = {
+                        ...solicitudDetalle,
+                        detalle: detallesCargadosManual || solicitudDetalle.detalle || solicitudDetalle.detalles || [],
+                        detalles: detallesCargadosManual || solicitudDetalle.detalle || solicitudDetalle.detalles || [],
+                      };
+                      setSolicitudDetalle(null);
+                      manejarEditarRequerimiento(reqParaEditar);
+                    }}
+                    className="px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer active:scale-95"
+                    title="Editar requerimiento completo en el formulario"
+                  >
+                    <Edit2 size={13} />
+                    <span>Editar Requerimiento</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setSolicitudDetalle(null)}
+                  className="p-1.5 rounded-xl text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
+                  title="Cerrar modal"
+                >
+                  <X size={18} />
+                </button>
+              </div>
             </div>
 
             <div className="p-4 overflow-y-auto space-y-3">
@@ -1976,11 +2276,29 @@ const BalanceSemanal = () => {
               })()}
             </div>
 
-            <div className="px-4 py-2.5 bg-gray-50 border-t border-gray-100 flex justify-end">
+            <div className="px-4 py-2.5 bg-gray-50 border-t border-gray-100 flex items-center justify-between">
+              {puedeEditarRequerimientos ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const reqParaEditar = {
+                      ...solicitudDetalle,
+                      detalle: detallesCargadosManual || solicitudDetalle.detalle || solicitudDetalle.detalles || [],
+                      detalles: detallesCargadosManual || solicitudDetalle.detalle || solicitudDetalle.detalles || [],
+                    };
+                    setSolicitudDetalle(null);
+                    manejarEditarRequerimiento(reqParaEditar);
+                  }}
+                  className="px-3 py-1.5 bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-800 rounded-xl text-xs font-bold transition-all shadow-2xs flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Edit2 size={13} />
+                  <span>Editar este requerimiento</span>
+                </button>
+              ) : <div />}
               <button
                 type="button"
                 onClick={() => setSolicitudDetalle(null)}
-                className="px-4 py-1.5 rounded-xl border border-gray-200 text-xs font-bold text-gray-600 hover:bg-white transition-all"
+                className="px-4 py-1.5 rounded-xl border border-gray-200 text-xs font-bold text-gray-600 hover:bg-white transition-all cursor-pointer"
               >
                 Cerrar
               </button>

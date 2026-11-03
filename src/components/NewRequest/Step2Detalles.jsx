@@ -1204,7 +1204,7 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
 
                   <div>
                     <label className="block text-xs font-black text-brand-dark uppercase tracking-wider mb-1.5">
-                      Fecha del Comprobante *
+                      Fecha de "EMISIÓN" del Comprobante *
                     </label>
                     <input
                       type="date"
@@ -1376,11 +1376,10 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
                               setErrorLocal('');
                             }
                           }}
-                          className={`w-full bg-white border-2 rounded-xl px-4 py-2.5 text-sm font-semibold outline-none transition-colors ${
-                            RUCS_EMPRESAS_PROPIAS[formulario.nro_ruc]
+                          className={`w-full bg-white border-2 rounded-xl px-4 py-2.5 text-sm font-semibold outline-none transition-colors ${RUCS_EMPRESAS_PROPIAS[formulario.nro_ruc]
                               ? 'border-red-400 focus:border-red-600 bg-red-50/40 text-red-800 ring-2 ring-red-100'
                               : 'border-gray-100 focus:border-brand-primary text-brand-dark'
-                          }`}
+                            }`}
                         />
 
                         {/* Razón Social detectada en pequeño debajo del RUC */}
@@ -1404,13 +1403,12 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
 
                         {/* Mensaje de aviso de OpenRUC o advertencia de RUC propio */}
                         {mensajeRuc && (
-                          <div className={`p-2.5 rounded-xl border mt-1.5 text-[11px] font-semibold leading-relaxed animate-fade-in ${
-                            mensajeRuc.tipo === 'error'
+                          <div className={`p-2.5 rounded-xl border mt-1.5 text-[11px] font-semibold leading-relaxed animate-fade-in ${mensajeRuc.tipo === 'error'
                               ? 'bg-red-50 text-red-700 border-red-200'
                               : mensajeRuc.tipo === 'advertencia'
-                              ? 'bg-amber-50 text-amber-800 border-amber-200'
-                              : 'bg-emerald-50 text-emerald-800 border-emerald-200'
-                          }`}>
+                                ? 'bg-amber-50 text-amber-800 border-amber-200'
+                                : 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                            }`}>
                             <div className="flex items-start gap-1.5">
                               <AlertCircle size={14} className="shrink-0 mt-0.5" />
                               <span>{mensajeRuc.texto}</span>
@@ -1589,8 +1587,8 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
 
                     {/* Aviso informativo de borrador vs liquidación */}
                     <div className={`mb-3 p-2.5 rounded-xl flex items-start gap-2 text-xs ${subgastoExigeAdjunto(subgastoActivo)
-                        ? 'bg-amber-50/90 border border-amber-200/90 text-amber-900'
-                        : 'bg-emerald-50/90 border border-emerald-200/90 text-emerald-900'
+                      ? 'bg-amber-50/90 border border-amber-200/90 text-amber-900'
+                      : 'bg-emerald-50/90 border border-emerald-200/90 text-emerald-900'
                       }`}>
                       {subgastoExigeAdjunto(subgastoActivo) ? (
                         <>

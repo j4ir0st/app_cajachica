@@ -28,7 +28,8 @@ import {
   ShieldAlert,
   SlidersHorizontal,
   CheckSquare,
-  Tag
+  Tag,
+  Edit2
 } from 'lucide-react';
 import { useUserStore } from '../store/userStore';
 import { useCatalogoStore } from '../store/catalogoStore';
@@ -37,7 +38,7 @@ import { obtenerTipoCaja, extraerIdEmpresa, clasificarTipoCajaAprobacion } from 
 import { CLAVES_CATALOGO, leerDeCache, guardarEnCache } from '../utils/catalogoCache';
 import { esArchivoPdf } from '../utils/archivoUtil';
 import { resolverRutaOEntidad } from '../utils/entidades';
-import { esGerenteOperaciones, puedeAccederCierreCaja } from '../utils/permisos';
+import { esGerenteOperaciones, esSuperusuario, puedeAccederCierreCaja } from '../utils/permisos';
 import ModalVisorComprobante from '../components/ModalVisorComprobante';
 import Toast from '../components/Toast';
 
@@ -105,6 +106,9 @@ const Aprobaciones = () => {
   const { entidades } = useCatalogoStore();
 
   const esGerente = useMemo(() => esGerenteOperaciones(user), [user]);
+  const puedeEditarRequerimientos = useMemo(() => {
+    return esGerenteOperaciones(user) || esSuperusuario(user);
+  }, [user]);
 
   const [solicitudes, setSolicitudes] = useState([]);
   const [cargando, setCargando] = useState(true);
@@ -578,6 +582,57 @@ const Aprobaciones = () => {
       });
     } finally {
       setProcesandoAccion(false);
+    }
+  };
+
+  // ============================================================================
+  // GESTIÓN DE EDICIÓN DE REQUERIMIENTOS (GERENTE DE OPERACIONES / SUPERUSUARIOS)
+  // ============================================================================
+
+  const manejarEditarRequerimiento = async (req) => {
+    if (!puedeEditarRequerimientos || !req) return;
+
+    // Si ya tiene los comprobantes completos en memoria como array de objetos
+    const detallesExistentes = req.detalle || req.detalles;
+    if (
+      Array.isArray(detallesExistentes) &&
+      detallesExistentes.length > 0 &&
+      typeof detallesExistentes[0] === 'object'
+    ) {
+      navigate('/nueva-solicitud', { state: { requerimientoAEditar: req, desdeRuta: '/aprobaciones' } });
+      return;
+    }
+
+    // Si solo tiene IDs o URLs, obtener el requerimiento completo con sus comprobantes
+    try {
+      const resReq = await fetchAuth(`${API_URL}/Requerimiento_CajaChica/${req.id}/?format=json`);
+      if (resReq.ok) {
+        const dataReq = await resReq.json();
+        const itemsReq = dataReq.detalle || dataReq.detalles;
+        if (Array.isArray(itemsReq) && itemsReq.length > 0 && typeof itemsReq[0] === 'object') {
+          navigate('/nueva-solicitud', { state: { requerimientoAEditar: dataReq, desdeRuta: '/aprobaciones' } });
+          return;
+        }
+      }
+
+      // Fallback complementario desde RC_Detalle
+      const resDet = await fetchAuth(`${API_URL}/RC_Detalle/?requerimiento_id=${req.id}&format=json`);
+      if (resDet.ok) {
+        const dataDet = await resDet.json();
+        const listaDet = dataDet.results ?? (Array.isArray(dataDet) ? dataDet : []);
+        const reqConDetalles = {
+          ...req,
+          detalle: listaDet,
+          detalles: listaDet,
+        };
+        navigate('/nueva-solicitud', { state: { requerimientoAEditar: reqConDetalles, desdeRuta: '/aprobaciones' } });
+        return;
+      }
+
+      navigate('/nueva-solicitud', { state: { requerimientoAEditar: req, desdeRuta: '/aprobaciones' } });
+    } catch (err) {
+      console.error(`[Aprobaciones] Error al obtener detalles del requerimiento #${req.id} para edición:`, err);
+      navigate('/nueva-solicitud', { state: { requerimientoAEditar: req, desdeRuta: '/aprobaciones' } });
     }
   };
 
@@ -1235,19 +1290,20 @@ const Aprobaciones = () => {
                           <span className="hidden xl:inline">Auditar</span>
                         </button>
 
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setModalPostergar(req);
-                            setMotivoPostergacion('');
-                          }}
-                          className="p-1.5 sm:px-2.5 sm:py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-700 rounded-xl transition-colors border border-amber-200 font-black text-xs flex items-center gap-1 shadow-xs"
-                          title="Postergar a siguiente semana"
-                        >
-                          <RotateCcw size={13} />
-                          <span className="hidden xl:inline">Postergar</span>
-                        </button>
+                        {puedeEditarRequerimientos && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              manejarEditarRequerimiento(req);
+                            }}
+                            className="p-1.5 sm:px-2.5 sm:py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-700 rounded-xl transition-colors border border-amber-200 font-black text-xs flex items-center gap-1 shadow-xs cursor-pointer"
+                            title="Editar requerimiento (Errores de registro)"
+                          >
+                            <Edit2 size={13} />
+                            <span className="hidden xl:inline">Editar</span>
+                          </button>
+                        )}
 
                         <button
                           type="button"
@@ -1394,18 +1450,19 @@ const Aprobaciones = () => {
                         <span>Revisar</span>
                       </button>
 
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setModalPostergar(req);
-                          setMotivoPostergacion('');
-                        }}
-                        className="py-1.5 px-2 bg-amber-50 hover:bg-amber-100 text-amber-700 font-black text-[10px] rounded-lg border border-amber-200 flex items-center justify-center gap-1 transition-all truncate"
-                        title="Mover o postergar para el próximo cierre"
-                      >
-                        <RotateCcw size={12} />
-                        <span>Postergar</span>
-                      </button>
+                      {puedeEditarRequerimientos ? (
+                        <button
+                          type="button"
+                          onClick={() => manejarEditarRequerimiento(req)}
+                          className="py-1.5 px-2 bg-amber-50 hover:bg-amber-100 text-amber-700 font-black text-[10px] rounded-lg border border-amber-200 flex items-center justify-center gap-1 transition-all truncate cursor-pointer"
+                          title="Editar requerimiento (Errores de registro)"
+                        >
+                          <Edit2 size={12} />
+                          <span>Editar</span>
+                        </button>
+                      ) : (
+                        <div />
+                      )}
 
                       <button
                         type="button"
@@ -1505,31 +1562,23 @@ const Aprobaciones = () => {
               </div>
 
               <div className="flex items-center gap-2">
-                {esGerente && (
+                {puedeEditarRequerimientos && (
                   <button
                     type="button"
-                    onClick={(e) => handleToggleRevision(solicitudAuditoria, e)}
-                    disabled={conmutandoId === solicitudAuditoria.id || conmutandoMasivo}
-                    className={`flex items-center gap-1.5 px-3 py-1 rounded-xl border font-black text-xs transition-all shadow-xs active:scale-95 ${
-                      Boolean(solicitudAuditoria.revisado || solicitudAuditoria.revision)
-                        ? 'bg-emerald-500 hover:bg-emerald-600 text-white border-emerald-600'
-                        : 'bg-gray-50 hover:bg-emerald-50 text-gray-600 hover:text-emerald-700 border-gray-200'
-                    }`}
-                    title="Conmutar estado de revisión gerencial"
+                    onClick={() => {
+                      const reqParaEditar = {
+                        ...solicitudAuditoria,
+                        detalle: solicitudAuditoria.detalle || solicitudAuditoria.detalles || [],
+                        detalles: solicitudAuditoria.detalle || solicitudAuditoria.detalles || [],
+                      };
+                      setSolicitudAuditoria(null);
+                      manejarEditarRequerimiento(reqParaEditar);
+                    }}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-amber-200 bg-amber-50 hover:bg-amber-100 text-amber-800 font-black text-xs transition-all shadow-xs active:scale-95 cursor-pointer"
+                    title="Editar requerimiento completo en el formulario"
                   >
-                    {conmutandoId === solicitudAuditoria.id ? (
-                      <RefreshCw size={13} className="animate-spin text-current" />
-                    ) : Boolean(solicitudAuditoria.revisado || solicitudAuditoria.revision) ? (
-                      <>
-                        <CheckCircle2 size={14} />
-                        <span>Revisado</span>
-                      </>
-                    ) : (
-                      <>
-                        <Clock size={14} />
-                        <span>Marcar Revisado</span>
-                      </>
-                    )}
+                    <Edit2 size={13} />
+                    <span>Editar</span>
                   </button>
                 )}
 

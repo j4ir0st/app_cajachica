@@ -24,7 +24,8 @@ import {
   Clock,
   ArrowRight,
   MapPin,
-  Car
+  Car,
+  Edit2
 } from 'lucide-react';
 import { useUserStore } from '../store/userStore';
 import { useCatalogoStore } from '../store/catalogoStore';
@@ -32,7 +33,7 @@ import { fetchAuth, extraerMensajeError } from '../utils/fetchAuth';
 import { obtenerTipoCaja } from '../utils/tipoCaja';
 import { esArchivoPdf } from '../utils/archivoUtil';
 import { resolverRutaOEntidad } from '../utils/entidades';
-import { puedeAccederCierreCaja } from '../utils/permisos';
+import { puedeAccederCierreCaja, esGerenteOperaciones, esSuperusuario } from '../utils/permisos';
 import ModalVisorComprobante from '../components/ModalVisorComprobante';
 import Toast from '../components/Toast';
 
@@ -100,6 +101,11 @@ const CierreCaja = () => {
   const navigate = useNavigate();
   const { user } = useUserStore();
   const { entidades } = useCatalogoStore();
+
+  // Permiso para editar requerimientos (solo Gerente de Operaciones y Superusuarios)
+  const puedeEditarRequerimientos = useMemo(() => {
+    return esGerenteOperaciones(user) || esSuperusuario(user);
+  }, [user]);
 
   // Protección estricta: Solo Gerente de Operaciones y Superusuario
   useEffect(() => {
@@ -321,6 +327,57 @@ const CierreCaja = () => {
         titulo: 'Error al Anular',
         mensaje: err.message || 'No se pudo anular la solicitud seleccionada.',
       });
+    }
+  };
+
+  // ============================================================================
+  // GESTIÓN DE EDICIÓN DE REQUERIMIENTOS (GERENTE DE OPERACIONES / SUPERUSUARIOS)
+  // ============================================================================
+
+  const manejarEditarRequerimiento = async (req) => {
+    if (!puedeEditarRequerimientos || !req) return;
+
+    // Si ya tiene los comprobantes completos en memoria como array de objetos
+    const detallesExistentes = req.detalle || req.detalles;
+    if (
+      Array.isArray(detallesExistentes) &&
+      detallesExistentes.length > 0 &&
+      typeof detallesExistentes[0] === 'object'
+    ) {
+      navigate('/nueva-solicitud', { state: { requerimientoAEditar: req, desdeRuta: '/cierre-caja' } });
+      return;
+    }
+
+    // Si solo tiene IDs o URLs, obtener el requerimiento completo con sus comprobantes
+    try {
+      const resReq = await fetchAuth(`${API_URL}/Requerimiento_CajaChica/${req.id}/?format=json`);
+      if (resReq.ok) {
+        const dataReq = await resReq.json();
+        const itemsReq = dataReq.detalle || dataReq.detalles;
+        if (Array.isArray(itemsReq) && itemsReq.length > 0 && typeof itemsReq[0] === 'object') {
+          navigate('/nueva-solicitud', { state: { requerimientoAEditar: dataReq, desdeRuta: '/cierre-caja' } });
+          return;
+        }
+      }
+
+      // Fallback complementario desde RC_Detalle
+      const resDet = await fetchAuth(`${API_URL}/RC_Detalle/?requerimiento_id=${req.id}&format=json`);
+      if (resDet.ok) {
+        const dataDet = await resDet.json();
+        const listaDet = dataDet.results ?? (Array.isArray(dataDet) ? dataDet : []);
+        const reqConDetalles = {
+          ...req,
+          detalle: listaDet,
+          detalles: listaDet,
+        };
+        navigate('/nueva-solicitud', { state: { requerimientoAEditar: reqConDetalles, desdeRuta: '/cierre-caja' } });
+        return;
+      }
+
+      navigate('/nueva-solicitud', { state: { requerimientoAEditar: req, desdeRuta: '/cierre-caja' } });
+    } catch (err) {
+      console.error(`[CierreCaja] Error al obtener detalles del requerimiento #${req.id} para edición:`, err);
+      navigate('/nueva-solicitud', { state: { requerimientoAEditar: req, desdeRuta: '/cierre-caja' } });
     }
   };
 
@@ -713,13 +770,28 @@ const CierreCaja = () => {
                     </div>
 
                     <div className="flex items-center gap-1">
+                      {puedeEditarRequerimientos && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            manejarEditarRequerimiento(req);
+                          }}
+                          className="p-1.5 bg-amber-50 hover:bg-amber-100 text-amber-700 hover:text-amber-800 rounded-lg transition-colors border border-amber-200 cursor-pointer shadow-2xs flex items-center gap-1"
+                          title="Editar requerimiento (Errores de registro)"
+                        >
+                          <Edit2 size={13} />
+                          <span className="hidden xl:inline text-[10px] font-bold">Editar</span>
+                        </button>
+                      )}
+
                       <button
                         type="button"
                         onClick={(e) => {
                           e.stopPropagation();
                           setSolicitudSeleccionada(req);
                         }}
-                        className="p-1.5 bg-gray-50 hover:bg-brand-light text-gray-600 hover:text-brand-primary rounded-lg transition-colors border border-gray-100"
+                        className="p-1.5 bg-gray-50 hover:bg-brand-light text-gray-600 hover:text-brand-primary rounded-lg transition-colors border border-gray-100 cursor-pointer"
                         title="Ver Comprobantes"
                       >
                         <Eye size={13} />
@@ -873,13 +945,34 @@ const CierreCaja = () => {
                 </div>
                 <h3 className="text-sm font-black text-brand-dark">Comprobantes de la Rendición</h3>
               </div>
-              <button
-                type="button"
-                onClick={() => setSolicitudSeleccionada(null)}
-                className="p-1.5 rounded-xl text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
-              >
-                <X size={18} />
-              </button>
+              <div className="flex items-center gap-2">
+                {puedeEditarRequerimientos && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const reqParaEditar = {
+                        ...solicitudSeleccionada,
+                        detalle: solicitudSeleccionada.detalle || solicitudSeleccionada.detalles || [],
+                        detalles: solicitudSeleccionada.detalle || solicitudSeleccionada.detalles || [],
+                      };
+                      setSolicitudSeleccionada(null);
+                      manejarEditarRequerimiento(reqParaEditar);
+                    }}
+                    className="px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-xs font-bold transition-all shadow-xs flex items-center gap-1.5 cursor-pointer active:scale-95"
+                    title="Editar requerimiento completo en el formulario"
+                  >
+                    <Edit2 size={13} />
+                    <span>Editar Requerimiento</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setSolicitudSeleccionada(null)}
+                  className="p-1.5 rounded-xl text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors cursor-pointer"
+                >
+                  <X size={18} />
+                </button>
+              </div>
             </div>
 
             <div className="p-4 overflow-y-auto space-y-3">
@@ -992,11 +1085,29 @@ const CierreCaja = () => {
               })}
             </div>
 
-            <div className="px-4 py-2.5 bg-gray-50 border-t border-gray-100 flex justify-end">
+            <div className="px-4 py-2.5 bg-gray-50 border-t border-gray-100 flex items-center justify-between">
+              {puedeEditarRequerimientos ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const reqParaEditar = {
+                      ...solicitudSeleccionada,
+                      detalle: solicitudSeleccionada.detalle || solicitudSeleccionada.detalles || [],
+                      detalles: solicitudSeleccionada.detalle || solicitudSeleccionada.detalles || [],
+                    };
+                    setSolicitudSeleccionada(null);
+                    manejarEditarRequerimiento(reqParaEditar);
+                  }}
+                  className="px-3 py-1.5 bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-800 rounded-xl text-xs font-bold transition-all shadow-2xs flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Edit2 size={13} />
+                  <span>Editar este requerimiento</span>
+                </button>
+              ) : <div />}
               <button
                 type="button"
                 onClick={() => setSolicitudSeleccionada(null)}
-                className="px-4 py-1.5 rounded-xl border border-gray-200 text-xs font-bold text-gray-600 hover:bg-white transition-all"
+                className="px-4 py-1.5 rounded-xl border border-gray-200 text-xs font-bold text-gray-600 hover:bg-white transition-all cursor-pointer"
               >
                 Cerrar
               </button>
