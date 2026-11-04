@@ -45,6 +45,16 @@ const OPCIONES_ZONA = [
   { valor: 'P', etiqueta: 'Provincia' },
 ];
 
+// 6 destinos más comunes para Distribución Provincia
+const DESTINOS_COMUNES_PROVINCIA = [
+  { clave: 'AREQUIPA', nombre: 'AREQUIPA' },
+  { clave: 'TRUJILLO', nombre: 'TRUJILLO' },
+  { clave: 'CHICLAYO', nombre: 'CHICLAYO' },
+  { clave: 'PIURA', nombre: 'PIURA' },
+  { clave: 'HUARAZ', nombre: 'HUARAZ' },
+  { clave: 'CUZCO', nombre: 'CUZCO' },
+];
+
 // RUCs de empresas administradas internamente (no permitidas como emisor/proveedor)
 const RUCS_EMPRESAS_PROPIAS = {
   '20516920123': 'SURGICORP S.R.L.',
@@ -227,7 +237,18 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
 
   // Subgastos visibles según la matriz de accesos por Área y Puesto (ACCESOS OPCIONES CAJA CHICA.xlsx)
   const subgastosDisponibles = useMemo(() => {
-    return filtrarSubgastosPorPerfil(subgastos, user, tiposGasto);
+    const filtrados = filtrarSubgastosPorPerfil(subgastos, user, tiposGasto);
+    // En Distribución Provincia deben omitirse los tipos de gastos de courier
+    return filtrados.filter((s) => {
+      const nombreTipo = s.tipogasto_id?.nombre || '';
+      const esDistribucionProvincia =
+        normalizarTexto(nombreTipo).includes('distribucion provincia') ||
+        normalizarTexto(s.nombre || '').includes('distribucion provincia');
+      if (esDistribucionProvincia && normalizarTexto(s.nombre || '').includes('courier')) {
+        return false;
+      }
+      return true;
+    });
   }, [subgastos, user, tiposGasto]);
 
   // Tipos de gasto disponibles (vinculados a los subgastos o catálogo completo)
@@ -299,6 +320,46 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
       sublabel: p.departamento ? `Dpto: ${p.departamento}` : '',
     }));
   }, [provincias]);
+
+  // Determina si el concepto activo o seleccionado corresponde a Distribución Provincia
+  const esGastoDistribucionProvincia = useMemo(() => {
+    const tipoObj =
+      tiposGastoDisponibles.find((t) => coincidenUrlsOIds(t.url, formulario.tipogasto_url)) ||
+      subgastoActivo?.tipogasto_id;
+    const nombreTipo = tipoObj?.nombre || '';
+    const nombreSub = subgastoActivo?.nombre || '';
+    const textoCombinado = normalizarTexto(`${nombreTipo} ${nombreSub}`);
+    return textoCombinado.includes('distribucion provincia');
+  }, [subgastoActivo, formulario.tipogasto_url, tiposGastoDisponibles]);
+
+  // Resuelve el objeto de provincia a partir del nombre o clave común
+  const resolverProvinciaPorNombre = (nombreDestino) => {
+    if (!Array.isArray(provincias) || provincias.length === 0) return null;
+    const busq = normalizarTexto(nombreDestino);
+    return (
+      provincias.find((p) => {
+        const normP = normalizarTexto(p.nombre || '');
+        if (busq === 'cuzco' || busq === 'cusco') {
+          return normP === 'cusco' || normP === 'cuzco';
+        }
+        return normP === busq;
+      }) || null
+    );
+  };
+
+  // Asigna directamente una de las provincias más frecuentes y fija la zona en 'P'
+  const seleccionarDestinoComun = (claveDestino) => {
+    setErrorLocal('');
+    const prov = resolverProvinciaPorNombre(claveDestino);
+    if (prov) {
+      const urlProv = prov.url || (prov.id ? `${API_URL}/RC_Provincia/${prov.id}/` : null);
+      setFormulario((prev) => ({
+        ...prev,
+        lima_provincia: 'P',
+        provincia_url: urlProv,
+      }));
+    }
+  };
 
   const opcionesEntidades = useMemo(() => {
     return (entidades || [])
@@ -397,6 +458,9 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
       return coincidenUrlsOIds(tUrl, tipoUrl);
     });
 
+    const tipoObj = tiposGastoDisponibles.find((t) => coincidenUrlsOIds(t.url, tipoUrl));
+    const esDistProv = normalizarTexto(tipoObj?.nombre || '').includes('distribucion provincia');
+
     // Si solo hay un subgasto disponible para este tipo, se auto-selecciona
     if (subFiltrados.length === 1) {
       seleccionarSubGasto(subFiltrados[0].url, tipoUrl);
@@ -406,6 +470,7 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
         tipogasto_url: tipoUrl,
         subgasto_url: null,
         subgasto_obj: null,
+        lima_provincia: esDistProv ? 'P' : prev.lima_provincia,
       }));
     }
   };
@@ -416,13 +481,16 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
     if (!subEncontrado) return;
 
     const tipoUrl = tipoUrlOverride || subEncontrado.tipogasto_id?.url || subEncontrado.tipogasto_id;
+    const tipoObj = tiposGastoDisponibles.find((t) => coincidenUrlsOIds(t.url, tipoUrl)) || subEncontrado.tipogasto_id;
+    const nombreTipo = tipoObj?.nombre || '';
+    const esDistProv = normalizarTexto(`${nombreTipo} ${subEncontrado.nombre}`).includes('distribucion provincia');
 
     // Regla Reactiva de Localidad Permitida ('L', 'P', 'A')
     let zonaCalculada = formulario.lima_provincia;
-    if (subEncontrado.localidad_permitida === 'L') {
-      zonaCalculada = 'L';
-    } else if (subEncontrado.localidad_permitida === 'P') {
+    if (esDistProv || subEncontrado.localidad_permitida === 'P') {
       zonaCalculada = 'P';
+    } else if (subEncontrado.localidad_permitida === 'L') {
+      zonaCalculada = 'L';
     }
 
     setFormulario((prev) => ({
@@ -1214,53 +1282,124 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
                     />
                   </div>
 
-                  {/* Selector de Zona según regla localidad_permitida */}
-                  <div>
-                    <label className="block text-xs font-black text-brand-dark uppercase tracking-wider mb-1.5">
-                      Zona del Gasto
-                      {subgastoActivo?.localidad_permitida !== 'A' && (
-                        <span className="text-[10px] font-bold text-gray-400 ml-1.5 normal-case">
-                          (Fijado por el concepto)
-                        </span>
-                      )}
-                    </label>
-                    <div className="grid grid-cols-2 gap-2">
-                      {OPCIONES_ZONA.map((op) => {
-                        const bloqueado = subgastoActivo?.localidad_permitida !== 'A';
-                        const seleccionado = formulario.lima_provincia === op.valor;
-                        return (
-                          <button
-                            key={op.valor}
-                            type="button"
-                            disabled={bloqueado}
-                            onClick={() => manejarCambio('lima_provincia', op.valor)}
-                            className={`py-3 rounded-2xl text-xs font-black uppercase tracking-wider transition-all border-2 ${seleccionado
-                              ? 'bg-brand-primary text-white border-brand-primary shadow-md shadow-brand-primary/20'
-                              : 'bg-white border-gray-100 text-gray-400 hover:border-gray-200'
-                              } ${bloqueado ? 'opacity-90 cursor-default' : 'cursor-pointer'}`}
-                          >
-                            {op.etiqueta}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
+                  {/* Selector de Ubicación / Destino */}
+                  {esGastoDistribucionProvincia ? (
+                    <div className="space-y-3.5 animate-fade-in">
+                      <div>
+                        <div className="flex items-center justify-between mb-1.5">
+                          <label className="block text-xs font-black text-brand-dark uppercase tracking-wider">
+                            Destino en Provincia *
+                          </label>
+                          <span className="text-[10px] font-bold text-brand-primary bg-brand-light px-2 py-0.5 rounded-lg border border-brand-primary/20">
+                            Distribución Provincia
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-gray-500 mb-2">
+                          Elija uno de los 6 destinos más comunes:
+                        </p>
 
-                  {/* Selector de Provincia si aplica */}
-                  {formulario.lima_provincia === 'P' && (
-                    <div className="animate-fade-in">
-                      <label className="block text-xs font-black text-brand-dark uppercase tracking-wider mb-1.5">
-                        Provincia de Destino *
-                      </label>
-                      <Combobox
-                        options={opcionesProvincias}
-                        value={formulario.provincia_url}
-                        onChange={(val) => manejarCambio('provincia_url', val)}
-                        placeholder="Buscar provincia..."
-                        icon={<MapPin size={14} className="text-brand-primary" />}
-                        minParaBusqueda={6}
-                      />
+                        {/* Set de botones con los 6 destinos más comunes */}
+                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                          {DESTINOS_COMUNES_PROVINCIA.map((destino) => {
+                            const provItem = resolverProvinciaPorNombre(destino.clave);
+                            const seleccionado = Boolean(
+                              provItem &&
+                              formulario.provincia_url &&
+                              coincidenUrlsOIds(formulario.provincia_url, provItem.url || provItem.id)
+                            );
+
+                            return (
+                              <button
+                                key={destino.clave}
+                                type="button"
+                                onClick={() => seleccionarDestinoComun(destino.clave)}
+                                className={`py-2.5 px-3 rounded-2xl text-xs font-black uppercase tracking-wider transition-all border-2 flex items-center justify-between gap-1.5 cursor-pointer active:scale-95 ${
+                                  seleccionado
+                                    ? 'bg-brand-primary text-white border-brand-primary shadow-md shadow-brand-primary/20 ring-2 ring-brand-primary/20'
+                                    : 'bg-white border-gray-100 text-brand-dark hover:border-brand-primary/40 hover:bg-brand-light/40'
+                                }`}
+                              >
+                                <span className="truncate">{destino.nombre}</span>
+                                {seleccionado ? (
+                                  <CheckCircle2 size={14} className="shrink-0 text-white" />
+                                ) : (
+                                  <MapPin size={13} className="shrink-0 text-gray-400" />
+                                )}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      {/* En caso de que no sea ninguno de los 6 más comunes, buscar en combobox provincias */}
+                      <div className="pt-1">
+                        <label className="block text-xs font-bold text-gray-500 mb-1.5">
+                          ¿Otro destino? Buscar en todas las provincias:
+                        </label>
+                        <Combobox
+                          options={opcionesProvincias}
+                          value={formulario.provincia_url}
+                          onChange={(val) => {
+                            manejarCambio('provincia_url', val);
+                            manejarCambio('lima_provincia', 'P');
+                          }}
+                          placeholder="Buscar entre todas las provincias..."
+                          icon={<MapPin size={14} className="text-brand-primary" />}
+                          minParaBusqueda={4}
+                        />
+                      </div>
                     </div>
+                  ) : (
+                    <>
+                      {/* Selector de Zona según regla localidad_permitida */}
+                      <div>
+                        <label className="block text-xs font-black text-brand-dark uppercase tracking-wider mb-1.5">
+                          Zona del Gasto
+                          {subgastoActivo?.localidad_permitida !== 'A' && (
+                            <span className="text-[10px] font-bold text-gray-400 ml-1.5 normal-case">
+                              (Fijado por el concepto)
+                            </span>
+                          )}
+                        </label>
+                        <div className="grid grid-cols-2 gap-2">
+                          {OPCIONES_ZONA.map((op) => {
+                            const bloqueado = subgastoActivo?.localidad_permitida !== 'A';
+                            const seleccionado = formulario.lima_provincia === op.valor;
+                            return (
+                              <button
+                                key={op.valor}
+                                type="button"
+                                disabled={bloqueado}
+                                onClick={() => manejarCambio('lima_provincia', op.valor)}
+                                className={`py-3 rounded-2xl text-xs font-black uppercase tracking-wider transition-all border-2 ${seleccionado
+                                  ? 'bg-brand-primary text-white border-brand-primary shadow-md shadow-brand-primary/20'
+                                  : 'bg-white border-gray-100 text-gray-400 hover:border-gray-200'
+                                  } ${bloqueado ? 'opacity-90 cursor-default' : 'cursor-pointer'}`}
+                              >
+                                {op.etiqueta}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+
+                      {/* Selector de Provincia si aplica */}
+                      {formulario.lima_provincia === 'P' && (
+                        <div className="animate-fade-in">
+                          <label className="block text-xs font-black text-brand-dark uppercase tracking-wider mb-1.5">
+                            Provincia de Destino *
+                          </label>
+                          <Combobox
+                            options={opcionesProvincias}
+                            value={formulario.provincia_url}
+                            onChange={(val) => manejarCambio('provincia_url', val)}
+                            placeholder="Buscar provincia..."
+                            icon={<MapPin size={14} className="text-brand-primary" />}
+                            minParaBusqueda={6}
+                          />
+                        </div>
+                      )}
+                    </>
                   )}
                 </div>
               )}

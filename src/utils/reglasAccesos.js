@@ -633,12 +633,20 @@ export const buscarReglaParaSubgasto = (subgasto, tiposGasto = []) => {
 export const filtrarSubgastosPorPerfil = (subgastos, user, tiposGasto = []) => {
   if (!Array.isArray(subgastos) || subgastos.length === 0) return [];
 
-  // Superusuarios, staff o Gerente de Operaciones ven el catálogo completo
-  if (esGerenteOperaciones(user)) {
-    return subgastos;
-  }
-
   return subgastos.filter((sub) => {
+    // En Distribución Provincia se omiten los conceptos de courier
+    const nombreTipo = sub.tipogasto_id?.nombre || '';
+    const esDistProv =
+      normalizarTexto(nombreTipo).includes('distribucion provincia') ||
+      normalizarTexto(sub.nombre || '').includes('distribucion provincia');
+    if (esDistProv && normalizarTexto(sub.nombre || '').includes('courier')) {
+      return false;
+    }
+
+    // Superusuarios, staff o Gerente de Operaciones ven el catálogo completo
+    if (esGerenteOperaciones(user)) {
+      return true;
+    }
     // 1. Si el backend ya nos envía directamente el campo grupo_acceso
     if (sub.grupo_acceso) {
       return tieneAccesoAGrupo(sub.grupo_acceso, user);

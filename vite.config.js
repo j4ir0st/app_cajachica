@@ -1,5 +1,6 @@
 import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
+import fs from 'node:fs'
 
 /**
  * Middleware para compatibilidad con IIS Reverse Proxy ({R:1}).
@@ -41,11 +42,17 @@ function iisFallbackPlugin() {
   };
 }
 
-// https://vite.dev/config/
+// Configuración principal de Vite
 export default defineConfig(({ mode }) => {
   // Cargar variables de entorno del archivo .env
   const env = loadEnv(mode, process.cwd(), '');
-  const target = (env.VITE_API_URL || 'https://appsurgicorperu.com/').replace(/\/$/, '');
+  let target = (env.VITE_API_URL).replace(/\/$/, '');
+
+  // Si corre dentro de un contenedor Docker y el destino apunta a localhost, redirigir a host.docker.internal
+  const enDocker = fs.existsSync('/.dockerenv') || Boolean(process.env.HOSTNAME && process.env.NODE_VERSION);
+  if (enDocker && (target.includes('localhost') || target.includes('127.0.0.1'))) {
+    target = target.replace('localhost', 'host.docker.internal').replace('127.0.0.1', 'host.docker.internal');
+  }
 
   return {
     plugins: [
@@ -70,27 +77,12 @@ export default defineConfig(({ mode }) => {
           changeOrigin: true,
           secure: false,
         },
-        '/SI_Empresa': {
-          target: target,
-          changeOrigin: true,
-          secure: false,
-        },
-        '/SI_Empresas': {
-          target: target,
-          changeOrigin: true,
-          secure: false,
-        },
         '/api': {
           target: target,
           changeOrigin: true,
           secure: false,
         },
         '/users': {
-          target: target,
-          changeOrigin: true,
-          secure: false,
-        },
-        '/Usuario': {
           target: target,
           changeOrigin: true,
           secure: false,
@@ -137,11 +129,6 @@ export default defineConfig(({ mode }) => {
           secure: false,
         },
         '/RC_SaldoSemanal': {
-          target: target,
-          changeOrigin: true,
-          secure: false,
-        },
-        '/saldos_semanales': {
           target: target,
           changeOrigin: true,
           secure: false,

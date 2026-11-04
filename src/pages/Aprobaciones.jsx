@@ -38,7 +38,8 @@ import { obtenerTipoCaja, extraerIdEmpresa, clasificarTipoCajaAprobacion } from 
 import { CLAVES_CATALOGO, leerDeCache, guardarEnCache } from '../utils/catalogoCache';
 import { esArchivoPdf } from '../utils/archivoUtil';
 import { resolverRutaOEntidad } from '../utils/entidades';
-import { esGerenteOperaciones, esSuperusuario, puedeAccederCierreCaja } from '../utils/permisos';
+import { esGerenteOperaciones, esSuperusuario, puedeAccederCierreCaja, esMandoArea, obtenerAreaLimpia } from '../utils/permisos';
+import { normalizarTexto } from '../utils/reglasAccesos';
 import ModalVisorComprobante from '../components/ModalVisorComprobante';
 import Toast from '../components/Toast';
 
@@ -106,6 +107,10 @@ const Aprobaciones = () => {
   const { entidades } = useCatalogoStore();
 
   const esGerente = useMemo(() => esGerenteOperaciones(user), [user]);
+  const esSuper = useMemo(() => esSuperusuario(user), [user]);
+  const esMando = useMemo(() => esMandoArea(user), [user]);
+  const areaUsuarioLimpia = useMemo(() => obtenerAreaLimpia(user), [user]);
+
   const puedeEditarRequerimientos = useMemo(() => {
     return esGerenteOperaciones(user) || esSuperusuario(user);
   }, [user]);
@@ -118,15 +123,16 @@ const Aprobaciones = () => {
   // Catálogo de usuarios en memoria para resolución de empr_id
   const [usuarios, setUsuarios] = useState(() => leerDeCache(CLAVES_CATALOGO.usuarios) || []);
 
-  // Filtros y Búsqueda: Por defecto siempre se muestra lo pendiente de revisión
+  // Filtros y Búsqueda: Por defecto siempre se muestra lo pendiente de revisión o aprobación
   const [busqueda, setBusqueda] = useState('');
   const [buscandoRemoto, setBuscandoRemoto] = useState(false);
   const [filtroRevision, setFiltroRevision] = useState('PENDIENTES'); // 'PENDIENTES' | 'REVISADOS'
   const [filtroTipoCaja, setFiltroTipoCaja] = useState(null); // null | 'A' | 'B' | 'C_SGC' | 'C_RRM'
 
-  // Estados de conmutación de revisión gerencial
+  // Estados de conmutación de revisión gerencial y aprobación de jefatura
   const [conmutandoId, setConmutandoId] = useState(null);
   const [conmutandoMasivo, setConmutandoMasivo] = useState(false);
+  const [conmutandoAprobacionId, setConmutandoAprobacionId] = useState(null);
 
   // Modal de Auditoría y Visor de Imagen
   const [solicitudAuditoria, setSolicitudAuditoria] = useState(null);
@@ -258,6 +264,109 @@ const Aprobaciones = () => {
     }
   };
 
+  // ============================================================================
+  // GESTIÓN DE PRE-APROBACIÓN DE JEFE DE ÁREA (OPCIÓN B: /aprobar-jefe/)
+  // ============================================================================
+
+  const handleToggleAprobacionJefe = async (req, e) => {
+    if (e) e.stopPropagation();
+    if (conmutandoAprobacionId === req.id) return;
+
+    const valorActual = Boolean(req.aprobado);
+    const nuevoValor = !valorActual;
+    setConmutandoAprobacionId(req.id);
+
+    const ahoraIso = new Date().toISOString();
+    const nombreJefe = user?.full_name || user?.nombre || user?.username || 'Jefe de Área';
+
+    // Actualización optimista inmediata en memoria
+    setSolicitudes((prev) =>
+      prev.map((s) =>
+        s.id === req.id
+          ? {
+              ...s,
+              aprobado: nuevoValor,
+              aprobado_por: nuevoValor ? user?.id : null,
+              aprobado_por_nombre: nuevoValor ? nombreJefe : null,
+              fecha_aprobacion: nuevoValor ? ahoraIso : null,
+            }
+          : s
+      )
+    );
+    if (solicitudAuditoria && solicitudAuditoria.id === req.id) {
+      setSolicitudAuditoria((prev) => ({
+        ...prev,
+        aprobado: nuevoValor,
+        aprobado_por: nuevoValor ? user?.id : null,
+        aprobado_por_nombre: nuevoValor ? nombreJefe : null,
+        fecha_aprobacion: nuevoValor ? ahoraIso : null,
+      }));
+    }
+
+    try {
+      const res = await fetchAuth(`${API_URL}/Requerimiento_CajaChica/${req.id}/aprobar-jefe/?format=json`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ aprobado: nuevoValor }),
+      });
+
+      if (!res.ok) {
+        // Revertir optimismo en caso de error
+        setSolicitudes((prev) =>
+          prev.map((s) =>
+            s.id === req.id
+              ? {
+                  ...s,
+                  aprobado: valorActual,
+                  aprobado_por: req.aprobado_por,
+                  aprobado_por_nombre: req.aprobado_por_nombre,
+                  fecha_aprobacion: req.fecha_aprobacion,
+                }
+              : s
+          )
+        );
+        if (solicitudAuditoria && solicitudAuditoria.id === req.id) {
+          setSolicitudAuditoria((prev) => ({
+            ...prev,
+            aprobado: valorActual,
+            aprobado_por: req.aprobado_por,
+            aprobado_por_nombre: req.aprobado_por_nombre,
+            fecha_aprobacion: req.fecha_aprobacion,
+          }));
+        }
+        const errorDetallado = await extraerMensajeError(res);
+        throw new Error(errorDetallado);
+      }
+
+      const respuestaData = await res.json().catch(() => null);
+      if (respuestaData) {
+        setSolicitudes((prev) =>
+          prev.map((s) => (s.id === req.id ? { ...s, ...respuestaData } : s))
+        );
+        if (solicitudAuditoria && solicitudAuditoria.id === req.id) {
+          setSolicitudAuditoria((prev) => ({ ...prev, ...respuestaData }));
+        }
+      }
+
+      setNotificacion({
+        tipo: 'exito',
+        titulo: nuevoValor ? 'Requerimiento Pre-Aprobado' : 'Aprobación Removida',
+        mensaje: nuevoValor
+          ? `El requerimiento #${req.id} fue pre-aprobado exitosamente.`
+          : `Se removió la pre-aprobación del requerimiento #${req.id}.`,
+      });
+    } catch (err) {
+      console.error('[Aprobaciones] Error al conmutar aprobación:', err);
+      setNotificacion({
+        tipo: 'error',
+        titulo: 'Error en Aprobación',
+        mensaje: err.message || 'No se pudo actualizar el estado de aprobación.',
+      });
+    } finally {
+      setConmutandoAprobacionId(null);
+    }
+  };
+
   const handleRevisarMasivo = async (marcarComo = true) => {
     if (conmutandoMasivo) return;
 
@@ -316,6 +425,19 @@ const Aprobaciones = () => {
   const solicitudesFiltradas = useMemo(() => {
     let base = solicitudes;
 
+    // 1. Filtrar por área si el usuario es Coordinador, Jefe o Supervisor (y no es Gerente ni Superusuario)
+    if (!esGerente && !esSuper && esMando && areaUsuarioLimpia) {
+      base = base.filter((req) => {
+        const areaReq = normalizarTexto(
+          typeof req.area_id === 'object'
+            ? (req.area_id?.nombre || req.area_id?.area_nombre || '')
+            : String(req.area_id || req.area || '')
+        );
+        return areaReq.includes(areaUsuarioLimpia) || areaUsuarioLimpia.includes(areaReq);
+      });
+    }
+
+    // 2. Búsqueda por texto o ID
     if (busqueda.trim()) {
       const query = busqueda.toLowerCase().trim();
       const querySinHash = query.replace(/^#/, '');
@@ -341,21 +463,28 @@ const Aprobaciones = () => {
       });
     }
 
+    // 3. Filtrado por estado de revisión/aprobación
     if (esGerente) {
       if (filtroRevision === 'REVISADOS') {
         base = base.filter((r) => Boolean(r.revisado || r.revision));
-      } else {
-        // Por defecto: PENDIENTES (Falta revisar)
+      } else if (filtroRevision === 'PENDIENTES') {
         base = base.filter((r) => !Boolean(r.revisado || r.revision));
+      }
+    } else if (esMando) {
+      if (filtroRevision === 'REVISADOS') {
+        base = base.filter((r) => Boolean(r.aprobado));
+      } else if (filtroRevision === 'PENDIENTES') {
+        base = base.filter((r) => !Boolean(r.aprobado));
       }
     }
 
+    // 4. Filtrado por tipo de caja
     if (filtroTipoCaja) {
       base = base.filter((req) => clasificarTipoCajaAprobacion(req, usuarios)?.tipo === filtroTipoCaja);
     }
 
     return base;
-  }, [solicitudes, busqueda, esGerente, filtroRevision, filtroTipoCaja, usuarios]);
+  }, [solicitudes, busqueda, esGerente, esSuper, esMando, areaUsuarioLimpia, filtroRevision, filtroTipoCaja, usuarios]);
 
   // Conteo reactivo por tipo de caja (SURGICORP: A, RRMEDICAL: B, SIN FACTURA SGC: C_SGC, SIN FACTURA RRM: C_RRM)
   const conteoTiposCaja = useMemo(() => {
@@ -520,6 +649,55 @@ const Aprobaciones = () => {
     };
   }, [solicitudes, filtroTipoCaja, usuarios]);
 
+  // Métricas reactivas de pre-aprobación para Jefes, Coordinadores y Supervisores de área
+  const metricasAprobacionArea = useMemo(() => {
+    let base = solicitudes;
+    if (!esGerente && !esSuper && esMando && areaUsuarioLimpia) {
+      base = base.filter((req) => {
+        const areaReq = normalizarTexto(
+          typeof req.area_id === 'object'
+            ? (req.area_id?.nombre || req.area_id?.area_nombre || '')
+            : String(req.area_id || req.area || '')
+        );
+        return areaReq.includes(areaUsuarioLimpia) || areaUsuarioLimpia.includes(areaReq);
+      });
+    }
+
+    if (filtroTipoCaja) {
+      base = base.filter((req) => clasificarTipoCajaAprobacion(req, usuarios)?.tipo === filtroTipoCaja);
+    }
+
+    const totalCount = base.length;
+    let totalMonto = 0;
+    let aprobadosCount = 0;
+    let aprobadosMonto = 0;
+
+    for (const req of base) {
+      const gasto = parseFloat(req.total_gastado || req.monto_solicitado || 0);
+      const montoValido = isNaN(gasto) ? 0 : gasto;
+      totalMonto += montoValido;
+
+      if (req.aprobado) {
+        aprobadosCount += 1;
+        aprobadosMonto += montoValido;
+      }
+    }
+
+    const faltantesCount = totalCount - aprobadosCount;
+    const faltantesMonto = Math.max(0, totalMonto - aprobadosMonto);
+    const porcentajeAprobado = totalCount > 0 ? Math.round((aprobadosCount / totalCount) * 100) : 0;
+
+    return {
+      totalCount,
+      totalMonto,
+      aprobadosCount,
+      aprobadosMonto,
+      faltantesCount,
+      faltantesMonto,
+      porcentajeAprobado,
+    };
+  }, [solicitudes, filtroTipoCaja, usuarios, esGerente, esSuper, esMando, areaUsuarioLimpia]);
+
   const totalMontoAuditoria = useMemo(() => {
     const base = filtroTipoCaja
       ? solicitudes.filter((req) => clasificarTipoCajaAprobacion(req, usuarios)?.tipo === filtroTipoCaja)
@@ -641,7 +819,7 @@ const Aprobaciones = () => {
   // ============================================================================
 
   const ejecutarPostergacion = async () => {
-    if (!modalPostergar) return;
+    if (!modalPostergar || (!esGerente && !esSuper)) return;
     setProcesandoAccion(true);
 
     try {
@@ -945,6 +1123,102 @@ const Aprobaciones = () => {
             </div>
           </div>
         </div>
+      ) : esMando ? (
+        /* Panel de Métricas para Jefes, Coordinadores y Supervisores de Área */
+        <div className="bg-white rounded-2xl p-3 sm:p-4 border border-gray-100 shadow-sm shrink-0 space-y-3">
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5 text-xs">
+            {/* 1. Total del Área */}
+            <div className="bg-brand-light/50 border border-gray-100 rounded-xl p-2.5 flex flex-col justify-between">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-black uppercase tracking-wider text-gray-500 flex items-center gap-1">
+                  <span>Rendiciones de mi Área</span>
+                </span>
+                <span className="text-[10px] font-bold text-brand-primary bg-white px-2 py-0.5 rounded-md border border-gray-100">
+                  {metricasAprobacionArea.totalCount} reg.
+                </span>
+              </div>
+              <div className="mt-1">
+                <span className="text-base sm:text-lg font-black text-brand-dark">
+                  S/ {metricasAprobacionArea.totalMonto.toFixed(2)}
+                </span>
+              </div>
+            </div>
+
+            {/* 2. Pre-Aprobadas por Jefatura */}
+            <div
+              onClick={() => setFiltroRevision('REVISADOS')}
+              className={`border rounded-xl p-2.5 flex flex-col justify-between cursor-pointer transition-all ${
+                filtroRevision === 'REVISADOS'
+                  ? 'bg-emerald-100/70 border-emerald-400 ring-2 ring-emerald-400/30'
+                  : 'bg-emerald-50/70 border-emerald-100 hover:border-emerald-300'
+              }`}
+              title="Filtrar rendiciones ya pre-aprobadas"
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-black uppercase tracking-wider text-emerald-700 flex items-center gap-1">
+                  <span>Pre-Aprobadas</span>
+                </span>
+                <span className="text-[10px] font-black text-emerald-700 bg-white px-2 py-0.5 rounded-md border border-emerald-200">
+                  {metricasAprobacionArea.aprobadosCount} ({metricasAprobacionArea.porcentajeAprobado}%)
+                </span>
+              </div>
+              <div className="mt-1">
+                <span className="text-base sm:text-lg font-black text-emerald-600">
+                  S/ {metricasAprobacionArea.aprobadosMonto.toFixed(2)}
+                </span>
+              </div>
+            </div>
+
+            {/* 3. Falta Pre-Aprobar */}
+            <div
+              onClick={() => setFiltroRevision('PENDIENTES')}
+              className={`border rounded-xl p-2.5 flex flex-col justify-between cursor-pointer transition-all ${
+                filtroRevision === 'PENDIENTES'
+                  ? 'bg-amber-100/70 border-amber-400 ring-2 ring-amber-400/30'
+                  : 'bg-amber-50/70 border-amber-100 hover:border-amber-300'
+              }`}
+              title="Filtrar rendiciones pendientes de pre-aprobación"
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-black uppercase tracking-wider text-amber-800 flex items-center gap-1">
+                  <span>Falta Aprobar</span>
+                </span>
+                <span className="text-[10px] font-black text-amber-800 bg-white px-2 py-0.5 rounded-md border border-amber-200">
+                  {metricasAprobacionArea.faltantesCount} reg.
+                </span>
+              </div>
+              <div className="mt-1">
+                <span className="text-base sm:text-lg font-black text-amber-600">
+                  S/ {metricasAprobacionArea.faltantesMonto.toFixed(2)}
+                </span>
+              </div>
+            </div>
+
+            {/* 4. Progreso de Aprobación */}
+            <div className="bg-gray-50 border border-gray-100 rounded-xl p-2.5 flex flex-col justify-between">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-black uppercase tracking-wider text-gray-500">
+                  Progreso Aprobación
+                </span>
+                <span className="text-[10px] font-black text-brand-dark">
+                  {metricasAprobacionArea.aprobadosCount} / {metricasAprobacionArea.totalCount}
+                </span>
+              </div>
+
+              {/* Barra de progreso */}
+              <div className="w-full bg-gray-200 rounded-full h-1.5 my-1.5 overflow-hidden">
+                <div
+                  className="bg-emerald-500 h-1.5 rounded-full transition-all duration-300"
+                  style={{ width: `${metricasAprobacionArea.porcentajeAprobado}%` }}
+                />
+              </div>
+
+              <div className="text-[10px] font-bold text-gray-400 text-right">
+                {metricasAprobacionArea.porcentajeAprobado}% completado
+              </div>
+            </div>
+          </div>
+        </div>
       ) : (
         /* Panel Estándar de Métricas para otros roles */
         <div className="bg-white rounded-2xl p-3 sm:p-3.5 border border-gray-100 shadow-sm shrink-0 grid grid-cols-3 gap-2 text-xs">
@@ -1103,8 +1377,8 @@ const Aprobaciones = () => {
           </button>
         </div>
 
-        {/* Pestañas de Filtro de Revisión (Exclusivo Gerente de Operaciones: Falta revisar / Revisados) */}
-        {esGerente && (
+        {/* Pestañas de Filtro de Revisión / Aprobación */}
+        {esGerente ? (
           <div className="flex items-center gap-1 shrink-0 bg-brand-light/60 p-1 rounded-xl w-full sm:w-auto justify-center">
             <button
               type="button"
@@ -1131,7 +1405,34 @@ const Aprobaciones = () => {
               <span>Revisados ({metricasRevision.revisadosCount})</span>
             </button>
           </div>
-        )}
+        ) : esMando ? (
+          <div className="flex items-center gap-1 shrink-0 bg-brand-light/60 p-1 rounded-xl w-full sm:w-auto justify-center">
+            <button
+              type="button"
+              onClick={() => setFiltroRevision('PENDIENTES')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer ${
+                filtroRevision === 'PENDIENTES'
+                  ? 'bg-amber-500 text-white shadow-xs'
+                  : 'text-amber-800 hover:bg-amber-100/70'
+              }`}
+            >
+              <Clock size={13} />
+              <span>Falta aprobar ({metricasAprobacionArea.faltantesCount})</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setFiltroRevision('REVISADOS')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer ${
+                filtroRevision === 'REVISADOS'
+                  ? 'bg-emerald-600 text-white shadow-xs'
+                  : 'text-emerald-800 hover:bg-emerald-100/70'
+              }`}
+            >
+              <CheckCircle2 size={13} />
+              <span>Aprobados ({metricasAprobacionArea.aprobadosCount})</span>
+            </button>
+          </div>
+        ) : null}
       </div>
 
       {/* Contenedor Scrollable de Solicitudes */}
@@ -1173,7 +1474,7 @@ const Aprobaciones = () => {
                       estaRevisado && esGerente ? 'border-emerald-200 bg-emerald-50/15' : 'border-gray-100'
                     } hover:border-blue-200 flex items-center justify-between gap-4 transition-all cursor-pointer group shadow-xs`}
                   >
-                    {/* Lado izquierdo: Switch revisión (si es gerente), ID, Badge Tipo, Solicitante e info */}
+                    {/* Lado izquierdo: Switch revisión (si es gerente), Switch aprobación (si es mando), ID, Badge Tipo, Solicitante e info */}
                     <div className="flex items-center gap-3 min-w-0">
                       {esGerente && (
                         <button
@@ -1202,6 +1503,34 @@ const Aprobaciones = () => {
                         </button>
                       )}
 
+                      {/* Control exclusivo para Jefes, Coordinadores y Supervisores de Área */}
+                      {esMando && !esGerente && (
+                        <button
+                          type="button"
+                          onClick={(e) => handleToggleAprobacionJefe(req, e)}
+                          disabled={conmutandoAprobacionId === req.id}
+                          className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border font-black text-[10px] transition-all shrink-0 cursor-pointer shadow-xs active:scale-95 ${
+                            Boolean(req.aprobado)
+                              ? 'bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-700'
+                              : 'bg-amber-50 hover:bg-emerald-50 text-amber-800 hover:text-emerald-700 border-amber-200 hover:border-emerald-300'
+                          }`}
+                          title={
+                            Boolean(req.aprobado)
+                              ? `Pre-aprobado por ${req.aprobado_por_nombre || 'Jefatura'}. Clic para desmarcar`
+                              : 'Requerimiento pendiente de pre-aprobación. Clic para pre-aprobar'
+                          }
+                        >
+                          {conmutandoAprobacionId === req.id ? (
+                            <RefreshCw size={12} className="animate-spin text-current" />
+                          ) : Boolean(req.aprobado) ? (
+                            <CheckCircle2 size={13} className="text-white" />
+                          ) : (
+                            <Clock size={13} className="text-amber-600" />
+                          )}
+                          <span>{Boolean(req.aprobado) ? 'Aprobado' : 'Por Aprobar'}</span>
+                        </button>
+                      )}
+
                       <span className="text-xs font-black text-brand-dark bg-brand-light border border-gray-200/60 px-2 py-1 rounded-lg shrink-0">
                         #{req.id}
                       </span>
@@ -1211,6 +1540,17 @@ const Aprobaciones = () => {
                       >
                         {tipoCajaInfo.etiqueta}
                       </span>
+
+                      {/* Badge de pre-aprobación visible para gerencia */}
+                      {esGerente && Boolean(req.aprobado) && (
+                        <span
+                          className="hidden lg:inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 text-[9px] font-black shrink-0"
+                          title={`Pre-aprobado por Jefatura: ${req.aprobado_por_nombre || ''}`}
+                        >
+                          <ShieldCheck size={11} className="text-emerald-600" />
+                          <span>Pre-aprobado</span>
+                        </span>
+                      )}
 
                       <div className="min-w-0">
                         <div className="flex items-center gap-2">
@@ -1373,6 +1713,20 @@ const Aprobaciones = () => {
                           >
                             {estaRevisado ? <CheckCircle2 size={11} /> : <Clock size={11} />}
                             <span>{estaRevisado ? 'Revisado' : 'Por revisar'}</span>
+                          </button>
+                        ) : esMando ? (
+                          <button
+                            type="button"
+                            onClick={(e) => handleToggleAprobacionJefe(req, e)}
+                            disabled={conmutandoAprobacionId === req.id}
+                            className={`flex items-center gap-1 px-2.5 py-1 rounded-xl border font-black text-[10px] transition-all shadow-xs ${
+                              Boolean(req.aprobado)
+                                ? 'bg-emerald-600 text-white border-emerald-700'
+                                : 'bg-amber-50 text-amber-800 border-amber-200'
+                            }`}
+                          >
+                            {Boolean(req.aprobado) ? <CheckCircle2 size={11} /> : <Clock size={11} />}
+                            <span>{Boolean(req.aprobado) ? 'Aprobado' : 'Por Aprobar'}</span>
                           </button>
                         ) : (
                           <span className="text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded-lg border bg-blue-50 text-blue-600 border-blue-200 flex items-center gap-1">
@@ -1750,16 +2104,50 @@ const Aprobaciones = () => {
                   </button>
                 )}
 
-                <button
-                  type="button"
-                  onClick={() => {
-                    setModalPostergar(solicitudAuditoria);
-                    setMotivoPostergacion('');
-                  }}
-                  className="px-3 py-1.5 rounded-xl border border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-800 text-xs font-bold transition-all"
-                >
-                  Postergar Semana
-                </button>
+                {/* Pre-Aprobación exclusiva para Jefe / Coordinador / Supervisor de Área */}
+                {esMando && !esGerente && (
+                  <button
+                    type="button"
+                    onClick={(e) => handleToggleAprobacionJefe(solicitudAuditoria, e)}
+                    disabled={conmutandoAprobacionId === solicitudAuditoria.id}
+                    className={`px-3 py-1.5 rounded-xl border text-xs font-black flex items-center gap-1.5 transition-all shadow-xs cursor-pointer active:scale-95 ${
+                      Boolean(solicitudAuditoria.aprobado)
+                        ? 'bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-700'
+                        : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border-emerald-300'
+                    }`}
+                    title={
+                      Boolean(solicitudAuditoria.aprobado)
+                        ? `Pre-aprobado por ${solicitudAuditoria.aprobado_por_nombre || 'Jefatura'}. Clic para desmarcar.`
+                        : 'Pre-aprobar requerimiento como jefe de área.'
+                    }
+                  >
+                    {conmutandoAprobacionId === solicitudAuditoria.id ? (
+                      <RefreshCw size={13} className="animate-spin text-current" />
+                    ) : Boolean(solicitudAuditoria.aprobado) ? (
+                      <CheckCircle2 size={14} className="text-white" />
+                    ) : (
+                      <Clock size={14} className="text-emerald-700" />
+                    )}
+                    <span>
+                      {Boolean(solicitudAuditoria.aprobado)
+                        ? 'Pre-Aprobado por Jefatura'
+                        : 'Pre-Aprobar Requerimiento'}
+                    </span>
+                  </button>
+                )}
+
+                {(esGerente || esSuper) && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setModalPostergar(solicitudAuditoria);
+                      setMotivoPostergacion('');
+                    }}
+                    className="px-3 py-1.5 rounded-xl border border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-800 text-xs font-bold transition-all"
+                  >
+                    Postergar Semana
+                  </button>
+                )}
 
                 <button
                   type="button"
@@ -1789,7 +2177,7 @@ const Aprobaciones = () => {
       {/* ========================================================================
           MODAL DE CONFIRMACIÓN PARA POSTERGAR A SIGUIENTE SEMANA
          ======================================================================== */}
-      {modalPostergar && createPortal(
+      {modalPostergar && (esGerente || esSuper) && createPortal(
         <div
           className="fixed inset-0 !m-0 z-50 flex items-center justify-center bg-brand-dark/70 backdrop-blur-sm p-4 animate-fade-in"
           onClick={() => setModalPostergar(null)}

@@ -258,6 +258,25 @@ export const esRolAprobador = (user) => {
   );
 };
 
+/**
+ * Determina si el usuario es Coordinador, Jefe o Supervisor de Área.
+ * Excluye permisos de gerencia general salvo superusuario.
+ */
+export const esMandoArea = (user) => {
+  if (!user) return false;
+  if (esSuperusuario(user)) return true;
+
+  const puesto = obtenerPuestoLimpio(user);
+  return (
+    puesto.includes('coordinador') ||
+    puesto.includes('coordinadora') ||
+    puesto.includes('jefe') ||
+    puesto.includes('jefatura') ||
+    puesto.includes('supervisor') ||
+    puesto.includes('supervisora')
+  );
+};
+
 // ============================================================================
 // EVALUACIÓN DE ACCESO POR PESTAÑA / RUTA
 // ============================================================================

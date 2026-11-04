@@ -148,6 +148,7 @@ const Step1Cabecera = ({ datos, onChange }) => {
     const inicializarConUrl = async () => {
       let usuarioUrl = user.url || null;
       let areaUrl = user.area_url || null;
+      let areaNombreInicial = extraerArea(user);
 
       if (!usuarioUrl || !areaUrl) {
         try {
@@ -165,7 +166,6 @@ const Step1Cabecera = ({ datos, onChange }) => {
         }
       }
 
-      const areaNombreInicial = extraerArea(user);
       onChange({
         usuario_id: user.id,
         usuario_url: usuarioUrl,
