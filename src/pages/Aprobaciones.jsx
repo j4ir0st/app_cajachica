@@ -64,6 +64,66 @@ const obtenerNombreSolicitante = (usuario) => {
 };
 
 /**
+ * Obtiene el nombre del jefe que aprobó la rendición.
+ */
+const obtenerNombreAprobador = (req, usuarios = []) => {
+  if (!req) return 'Jefatura';
+  if (req.aprobado_por_nombre) return req.aprobado_por_nombre;
+  const ap = req.aprobado_por;
+  if (!ap) return 'Jefatura';
+  if (typeof ap === 'object') {
+    return ap.full_name || `${ap.first_name || ''} ${ap.last_name || ''}`.trim() || ap.username || 'Jefatura';
+  }
+  if (Array.isArray(usuarios) && usuarios.length > 0) {
+    const idBuscado = typeof ap === 'number' ? ap : parseInt(String(ap).replace(/\D/g, ''), 10);
+    const encontrado = usuarios.find((u) => u.id === idBuscado);
+    if (encontrado) {
+      return (
+        encontrado.full_name ||
+        `${encontrado.first_name || ''} ${encontrado.last_name || ''}`.trim() ||
+        encontrado.username
+      );
+    }
+  }
+  return typeof ap === 'string' && !ap.startsWith('http') ? ap : 'Jefatura';
+};
+
+/**
+ * Formatea la fecha y hora de aprobación de forma concisa (DD/MM/YYYY HH:mm).
+ */
+const formatearFechaAprobacion = (fecha) => {
+  if (!fecha) return '';
+  try {
+    const d = new Date(fecha);
+    if (isNaN(d.getTime())) return String(fecha);
+    const pad = (n) => String(n).padStart(2, '0');
+    const dia = pad(d.getDate());
+    const mes = pad(d.getMonth() + 1);
+    const anio = d.getFullYear();
+    const horas = pad(d.getHours());
+    const minutos = pad(d.getMinutes());
+    return `${dia}/${mes}/${anio} ${horas}:${minutos}`;
+  } catch {
+    return String(fecha);
+  }
+};
+
+/**
+ * Genera el tooltip oficial de aprobación:
+ * "Aprobado por [nombre del jefe que aprobo] - [fecha de aprobacion]"
+ */
+const obtenerTooltipAprobacion = (req, usuarios = []) => {
+  if (!req?.aprobado) {
+    return 'Requerimiento pendiente de aprobación. Clic para aprobar';
+  }
+  const nombreJefe = obtenerNombreAprobador(req, usuarios);
+  const fechaStr = formatearFechaAprobacion(req.fecha_aprobacion);
+  return fechaStr
+    ? `Aprobado por ${nombreJefe} - ${fechaStr}`
+    : `Aprobado por ${nombreJefe}`;
+};
+
+/**
  * Extrae la información del subgasto principal (primer registro de detalle) de un requerimiento
  * para que el auditor pueda conocer preliminarmente de qué trata el gasto antes de entrar al detalle.
  */
@@ -350,10 +410,10 @@ const Aprobaciones = () => {
 
       setNotificacion({
         tipo: 'exito',
-        titulo: nuevoValor ? 'Requerimiento Pre-Aprobado' : 'Aprobación Removida',
+        titulo: nuevoValor ? 'Requerimiento Aprobado' : 'Aprobación Removida',
         mensaje: nuevoValor
-          ? `El requerimiento #${req.id} fue pre-aprobado exitosamente.`
-          : `Se removió la pre-aprobación del requerimiento #${req.id}.`,
+          ? `El requerimiento #${req.id} fue aprobado exitosamente.`
+          : `Se removió la aprobación del requerimiento #${req.id}.`,
       });
     } catch (err) {
       console.error('[Aprobaciones] Error al conmutar aprobación:', err);
@@ -1144,7 +1204,7 @@ const Aprobaciones = () => {
               </div>
             </div>
 
-            {/* 2. Pre-Aprobadas por Jefatura */}
+            {/* 2. Aprobadas por Jefatura */}
             <div
               onClick={() => setFiltroRevision('REVISADOS')}
               className={`border rounded-xl p-2.5 flex flex-col justify-between cursor-pointer transition-all ${
@@ -1152,11 +1212,11 @@ const Aprobaciones = () => {
                   ? 'bg-emerald-100/70 border-emerald-400 ring-2 ring-emerald-400/30'
                   : 'bg-emerald-50/70 border-emerald-100 hover:border-emerald-300'
               }`}
-              title="Filtrar rendiciones ya pre-aprobadas"
+              title="Filtrar rendiciones ya aprobadas"
             >
               <div className="flex items-center justify-between">
                 <span className="text-[10px] font-black uppercase tracking-wider text-emerald-700 flex items-center gap-1">
-                  <span>Pre-Aprobadas</span>
+                  <span>Aprobados</span>
                 </span>
                 <span className="text-[10px] font-black text-emerald-700 bg-white px-2 py-0.5 rounded-md border border-emerald-200">
                   {metricasAprobacionArea.aprobadosCount} ({metricasAprobacionArea.porcentajeAprobado}%)
@@ -1169,7 +1229,7 @@ const Aprobaciones = () => {
               </div>
             </div>
 
-            {/* 3. Falta Pre-Aprobar */}
+            {/* 3. Falta Aprobar */}
             <div
               onClick={() => setFiltroRevision('PENDIENTES')}
               className={`border rounded-xl p-2.5 flex flex-col justify-between cursor-pointer transition-all ${
@@ -1177,7 +1237,7 @@ const Aprobaciones = () => {
                   ? 'bg-amber-100/70 border-amber-400 ring-2 ring-amber-400/30'
                   : 'bg-amber-50/70 border-amber-100 hover:border-amber-300'
               }`}
-              title="Filtrar rendiciones pendientes de pre-aprobación"
+              title="Filtrar rendiciones pendientes de aprobación"
             >
               <div className="flex items-center justify-between">
                 <span className="text-[10px] font-black uppercase tracking-wider text-amber-800 flex items-center gap-1">
@@ -1516,8 +1576,8 @@ const Aprobaciones = () => {
                           }`}
                           title={
                             Boolean(req.aprobado)
-                              ? `Pre-aprobado por ${req.aprobado_por_nombre || 'Jefatura'}. Clic para desmarcar`
-                              : 'Requerimiento pendiente de pre-aprobación. Clic para pre-aprobar'
+                              ? `${obtenerTooltipAprobacion(req, usuarios)}. Clic para desmarcar`
+                              : 'Requerimiento pendiente de aprobación. Clic para aprobar'
                           }
                         >
                           {conmutandoAprobacionId === req.id ? (
@@ -1541,14 +1601,14 @@ const Aprobaciones = () => {
                         {tipoCajaInfo.etiqueta}
                       </span>
 
-                      {/* Badge de pre-aprobación visible para gerencia */}
+                      {/* Badge de aprobación visible para gerencia */}
                       {esGerente && Boolean(req.aprobado) && (
                         <span
-                          className="hidden lg:inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 text-[9px] font-black shrink-0"
-                          title={`Pre-aprobado por Jefatura: ${req.aprobado_por_nombre || ''}`}
+                          className="hidden lg:inline-flex items-center gap-1 px-2 py-0.5 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 text-[9px] font-black shrink-0 cursor-help"
+                          title={obtenerTooltipAprobacion(req, usuarios)}
                         >
                           <ShieldCheck size={11} className="text-emerald-600" />
-                          <span>Pre-aprobado</span>
+                          <span>Aprobado</span>
                         </span>
                       )}
 
@@ -1698,6 +1758,15 @@ const Aprobaciones = () => {
                           >
                             {tipoCajaInfo.etiqueta}
                           </span>
+                          {esGerente && Boolean(req.aprobado) && (
+                            <span
+                              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200 text-[8px] font-black"
+                              title={obtenerTooltipAprobacion(req, usuarios)}
+                            >
+                              <ShieldCheck size={10} className="text-emerald-600" />
+                              <span>Aprobado</span>
+                            </span>
+                          )}
                         </div>
 
                         {esGerente ? (
@@ -1719,6 +1788,11 @@ const Aprobaciones = () => {
                             type="button"
                             onClick={(e) => handleToggleAprobacionJefe(req, e)}
                             disabled={conmutandoAprobacionId === req.id}
+                            title={
+                              Boolean(req.aprobado)
+                                ? `${obtenerTooltipAprobacion(req, usuarios)}. Clic para desmarcar`
+                                : 'Requerimiento pendiente de aprobación. Clic para aprobar'
+                            }
                             className={`flex items-center gap-1 px-2.5 py-1 rounded-xl border font-black text-[10px] transition-all shadow-xs ${
                               Boolean(req.aprobado)
                                 ? 'bg-emerald-600 text-white border-emerald-700'
@@ -1911,6 +1985,15 @@ const Aprobaciones = () => {
                       </span>
                     );
                   })()}
+                  {Boolean(solicitudAuditoria.aprobado) && (
+                    <span
+                      className="text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded-lg border bg-emerald-50 text-emerald-700 border-emerald-200 flex items-center gap-1 cursor-help"
+                      title={obtenerTooltipAprobacion(solicitudAuditoria, usuarios)}
+                    >
+                      <ShieldCheck size={11} className="text-emerald-600" />
+                      <span>Aprobado</span>
+                    </span>
+                  )}
                 </div>
                 <h3 className="text-sm font-black text-brand-dark">Revisión de Gastos y Comprobantes</h3>
               </div>
@@ -1961,6 +2044,18 @@ const Aprobaciones = () => {
                   <span className="text-[10px] text-gray-400 block font-bold">Total Rendido:</span>
                   <span className="font-black text-brand-primary">S/ {parseFloat(solicitudAuditoria.total_gastado || 0).toFixed(2)}</span>
                 </div>
+                {Boolean(solicitudAuditoria.aprobado) && (
+                  <div className="col-span-2 sm:col-span-3 pt-1 border-t border-brand-primary/10 flex items-center justify-between text-[11px]">
+                    <span className="font-bold text-gray-500">Estado de Aprobación:</span>
+                    <span
+                      className="font-black text-emerald-700 flex items-center gap-1 cursor-help"
+                      title={obtenerTooltipAprobacion(solicitudAuditoria, usuarios)}
+                    >
+                      <ShieldCheck size={12} className="text-emerald-600 shrink-0" />
+                      <span>{obtenerTooltipAprobacion(solicitudAuditoria, usuarios)}</span>
+                    </span>
+                  </div>
+                )}
                 {solicitudAuditoria.obs && (
                   <div className="col-span-2 sm:col-span-3 pt-1 border-t border-brand-primary/10 text-[11px] text-gray-600">
                     <span className="font-bold text-brand-dark">Observaciones: </span>
@@ -2104,7 +2199,7 @@ const Aprobaciones = () => {
                   </button>
                 )}
 
-                {/* Pre-Aprobación exclusiva para Jefe / Coordinador / Supervisor de Área */}
+                {/* Aprobación exclusiva para Jefe / Coordinador / Supervisor de Área */}
                 {esMando && !esGerente && (
                   <button
                     type="button"
@@ -2117,8 +2212,8 @@ const Aprobaciones = () => {
                     }`}
                     title={
                       Boolean(solicitudAuditoria.aprobado)
-                        ? `Pre-aprobado por ${solicitudAuditoria.aprobado_por_nombre || 'Jefatura'}. Clic para desmarcar.`
-                        : 'Pre-aprobar requerimiento como jefe de área.'
+                        ? `${obtenerTooltipAprobacion(solicitudAuditoria, usuarios)}. Clic para desmarcar.`
+                        : 'Aprobar requerimiento como jefe de área.'
                     }
                   >
                     {conmutandoAprobacionId === solicitudAuditoria.id ? (
@@ -2130,8 +2225,8 @@ const Aprobaciones = () => {
                     )}
                     <span>
                       {Boolean(solicitudAuditoria.aprobado)
-                        ? 'Pre-Aprobado por Jefatura'
-                        : 'Pre-Aprobar Requerimiento'}
+                        ? 'Aprobado'
+                        : 'Aprobar Requerimiento'}
                     </span>
                   </button>
                 )}
