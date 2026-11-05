@@ -16,7 +16,7 @@ import {
 } from 'lucide-react';
 import { useCatalogoStore } from '../../store/catalogoStore';
 import { formatearNombreEntidad } from '../../utils/entidades';
-import { esArchivoPdf } from '../../utils/archivoUtil';
+import { esArchivoPdf, resolverUrlAdjunto } from '../../utils/archivoUtil';
 import { obtenerTipoCaja } from '../../utils/tipoCaja';
 import ModalVisorComprobante from '../ModalVisorComprobante';
 
@@ -42,8 +42,17 @@ const FilaResumen = ({ icono: Icono, etiqueta, valor, color = 'text-brand-dark' 
 const extraerIdDeUrl = (idOUri) => {
   if (!idOUri) return null;
   if (typeof idOUri === 'number') return idOUri;
+  if (typeof idOUri === 'object' && idOUri !== null) {
+    if (idOUri.id !== undefined && idOUri.id !== null) {
+      const num = parseInt(idOUri.id, 10);
+      return isNaN(num) ? null : num;
+    }
+    if (idOUri.url) return extraerIdDeUrl(idOUri.url);
+    return null;
+  }
   if (typeof idOUri === 'string') {
-    const partes = idOUri.split('/').filter(Boolean);
+    const urlLimpia = idOUri.split('?')[0].replace(/\/+$/, '');
+    const partes = urlLimpia.split('/').filter(Boolean);
     const ultimo = partes[partes.length - 1];
     const num = parseInt(ultimo, 10);
     return isNaN(num) ? null : num;
@@ -59,24 +68,44 @@ const coincidenUrlsOIds = (url1, url2) => {
   return id1 !== null && id2 !== null && id1 === id2;
 };
 
+/**
+ * Determina si el requerimiento se encuentra en estado Cerrado ('CD').
+ */
+const esPedidoCerrado = (estado) => {
+  if (!estado) return false;
+  if (typeof estado === 'string') {
+    const lim = estado.trim().toUpperCase();
+    return lim === 'CD' || lim === 'CERRADO';
+  }
+  if (typeof estado === 'object') {
+    if (estado.id) return esPedidoCerrado(estado.id);
+    if (estado.codigo) return esPedidoCerrado(estado.codigo);
+    if (estado.estado) return esPedidoCerrado(estado.estado);
+    const claves = Object.keys(estado);
+    return claves.some((k) => k.toUpperCase() === 'CD' || k.toUpperCase() === 'CERRADO');
+  }
+  return false;
+};
+
 // ============================================================================
 // COMPONENTE PRINCIPAL: STEP 3 RESUMEN
 // ============================================================================
 
 /**
- * Paso 3: Resumen final y selección de acción (Guardar Pendiente vs Enviar y Liquidar).
+ * Paso 3: Resumen final y selección de acción (Guardar Pendiente vs Liquidar).
  */
-const Step3Resumen = ({ cabecera, detalles, enviando, errorEnvio, onEnviarSolicitud }) => {
+const Step3Resumen = ({ cabecera, detalles = [], enviando, errorEnvio, onEnviarSolicitud }) => {
   const { tiposGasto, subgastos, entidades, provincias } = useCatalogoStore();
   const [archivoVisor, setArchivoVisor] = useState(null);
 
-  const totalGastos = detalles.reduce((acc, d) => acc + (parseFloat(d.costo) || 0), 0);
-  const montoSolicitadoNum = parseFloat(cabecera.monto_solicitado || 0);
+  const totalGastos = (detalles || []).reduce((acc, d) => acc + (parseFloat(d.costo) || 0), 0);
+  const montoSolicitadoNum = parseFloat(cabecera?.monto_solicitado || 0);
   const montoFinal = montoSolicitadoNum > 0 ? montoSolicitadoNum : totalGastos;
   const saldoRestante = montoFinal - totalGastos;
   const tieneSaldoSobrante = saldoRestante > 0.01;
-  const totalImagenes = detalles.filter((d) => d.adj_cajachica).length;
+  const totalImagenes = (detalles || []).filter((d) => d.adj_cajachica).length;
   const tipoCajaGeneral = obtenerTipoCaja({ detalles });
+  const esCerrado = esPedidoCerrado(cabecera?.estado_requerimiento);
 
   return (
     <div className="space-y-4 animate-fade-in font-outfit pb-4">
@@ -179,7 +208,7 @@ const Step3Resumen = ({ cabecera, detalles, enviando, errorEnvio, onEnviarSolici
                       </div>
                     ) : (
                       <img
-                        src={det._preview || (typeof det.adj_cajachica === 'string' ? det.adj_cajachica : '')}
+                        src={resolverUrlAdjunto(det._preview || det.adj_cajachica)}
                         alt="Adjunto"
                         className="w-full h-full object-cover"
                       />
@@ -260,31 +289,49 @@ const Step3Resumen = ({ cabecera, detalles, enviando, errorEnvio, onEnviarSolici
       )}
 
       {/* Botones de Acción en el Paso 3 */}
-      <div className="pt-2 grid grid-cols-1 sm:grid-cols-2 gap-3">
-        <button
-          type="button"
-          onClick={() => onEnviarSolicitud('PD')}
-          disabled={enviando}
-          className="w-full flex items-center justify-center gap-2 py-3.5 px-4 rounded-2xl border-2 border-amber-400/80 bg-amber-50 hover:bg-amber-100 text-amber-800 font-black text-xs uppercase tracking-wider shadow-sm transition-all disabled:opacity-50"
-        >
-          <Save size={16} />
-          <span>Guardar Pendiente (Borrador)</span>
-        </button>
+      {esCerrado ? (
+        <div className="pt-2">
+          <button
+            type="button"
+            onClick={() => onEnviarSolicitud('CD')}
+            disabled={enviando || tieneSaldoSobrante}
+            className={`w-full flex items-center justify-center gap-2 py-3.5 px-4 rounded-2xl text-white font-black text-xs uppercase tracking-wider shadow-lg transition-all ${
+              tieneSaldoSobrante
+                ? 'bg-gray-300 cursor-not-allowed shadow-none'
+                : 'bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 shadow-emerald-500/20 hover:scale-[1.01]'
+            } disabled:opacity-50`}
+          >
+            <Send size={16} />
+            <span>Enviar</span>
+          </button>
+        </div>
+      ) : (
+        <div className="pt-2 grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <button
+            type="button"
+            onClick={() => onEnviarSolicitud('PD')}
+            disabled={enviando}
+            className="w-full flex items-center justify-center gap-2 py-3.5 px-4 rounded-2xl border-2 border-amber-400/80 bg-amber-50 hover:bg-amber-100 text-amber-800 font-black text-xs uppercase tracking-wider shadow-sm transition-all disabled:opacity-50"
+          >
+            <Save size={16} />
+            <span>Guardar Pendiente (Borrador)</span>
+          </button>
 
-        <button
-          type="button"
-          onClick={() => onEnviarSolicitud('LQ')}
-          disabled={enviando || tieneSaldoSobrante}
-          className={`w-full flex items-center justify-center gap-2 py-3.5 px-4 rounded-2xl text-white font-black text-xs uppercase tracking-wider shadow-lg transition-all ${
-            tieneSaldoSobrante
-              ? 'bg-gray-300 cursor-not-allowed shadow-none'
-              : 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 shadow-blue-500/20 hover:scale-[1.01]'
-          } disabled:opacity-50`}
-        >
-          <Send size={16} />
-          <span>Enviar y Liquidar</span>
-        </button>
-      </div>
+          <button
+            type="button"
+            onClick={() => onEnviarSolicitud('LQ')}
+            disabled={enviando || tieneSaldoSobrante}
+            className={`w-full flex items-center justify-center gap-2 py-3.5 px-4 rounded-2xl text-white font-black text-xs uppercase tracking-wider shadow-lg transition-all ${
+              tieneSaldoSobrante
+                ? 'bg-gray-300 cursor-not-allowed shadow-none'
+                : 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 shadow-blue-500/20 hover:scale-[1.01]'
+            } disabled:opacity-50`}
+          >
+            <Send size={16} />
+            <span>Liquidar</span>
+          </button>
+        </div>
+      )}
 
       {/* Animación de Envío */}
       {enviando && (

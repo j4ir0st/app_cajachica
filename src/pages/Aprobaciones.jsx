@@ -36,7 +36,7 @@ import { useCatalogoStore } from '../store/catalogoStore';
 import { fetchAuth, extraerMensajeError } from '../utils/fetchAuth';
 import { obtenerTipoCaja, extraerIdEmpresa, clasificarTipoCajaAprobacion } from '../utils/tipoCaja';
 import { CLAVES_CATALOGO, leerDeCache, guardarEnCache } from '../utils/catalogoCache';
-import { esArchivoPdf } from '../utils/archivoUtil';
+import { esArchivoPdf, resolverUrlAdjunto } from '../utils/archivoUtil';
 import { resolverRutaOEntidad } from '../utils/entidades';
 import { esGerenteOperaciones, esSuperusuario, puedeAccederCierreCaja, esMandoArea, obtenerAreaLimpia } from '../utils/permisos';
 import { normalizarTexto } from '../utils/reglasAccesos';
@@ -907,7 +907,7 @@ const Aprobaciones = () => {
       // 2. Crear una nueva réplica en estado Liquidado (LQ) para la siguiente semana
       const usuarioUrl = typeof modalPostergar.usuario_id === 'object'
         ? modalPostergar.usuario_id.url
-        : (modalPostergar.usuario_id ? `${API_URL}/Usuario/${modalPostergar.usuario_id}/` : null);
+        : (modalPostergar.usuario_id ? `${API_URL}/users/${modalPostergar.usuario_id}/` : null);
 
       const areaUrl = typeof modalPostergar.area_id === 'object'
         ? modalPostergar.area_id.url
@@ -2097,7 +2097,7 @@ const Aprobaciones = () => {
                                   <span className="text-[8px] font-black uppercase tracking-wider mt-0.5">PDF</span>
                                 </div>
                               ) : (
-                                <img src={det.adj_cajachica} alt="Comprobante" className="w-full h-full object-cover" />
+                                <img src={resolverUrlAdjunto(det.adj_cajachica)} alt="Comprobante" className="w-full h-full object-cover" />
                               )}
                               <div className="absolute inset-0 bg-brand-dark/40 opacity-0 group-hover/img:opacity-100 flex items-center justify-center text-white transition-opacity">
                                 <Eye size={15} />

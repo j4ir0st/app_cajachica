@@ -1,7 +1,7 @@
 import React, { useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { X, ExternalLink, FileText, ZoomIn } from 'lucide-react';
-import { esArchivoPdf } from '../utils/archivoUtil';
+import { esArchivoPdf, resolverUrlAdjunto } from '../utils/archivoUtil';
 
 /**
  * Modal universal para previsualizar comprobantes de gasto (Imágenes y PDFs).
@@ -18,8 +18,7 @@ const ModalVisorComprobante = ({ archivo, onClose, titulo = 'Comprobante de Gast
 
   if (!archivo) return null;
 
-  const esObjetoFile = archivo instanceof File || archivo instanceof Blob;
-  const urlArchivo = esObjetoFile ? URL.createObjectURL(archivo) : archivo;
+  const urlArchivo = resolverUrlAdjunto(archivo);
   const esPdf = esArchivoPdf(archivo);
   const nombreArchivo = archivo?.name || (typeof archivo === 'string' ? archivo.split('/').pop()?.split('?')[0] : 'Comprobante');
 

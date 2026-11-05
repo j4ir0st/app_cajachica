@@ -31,7 +31,7 @@ import { useUserStore } from '../store/userStore';
 import { useCatalogoStore } from '../store/catalogoStore';
 import { fetchAuth, extraerMensajeError } from '../utils/fetchAuth';
 import { obtenerTipoCaja } from '../utils/tipoCaja';
-import { esArchivoPdf } from '../utils/archivoUtil';
+import { esArchivoPdf, resolverUrlAdjunto } from '../utils/archivoUtil';
 import { resolverRutaOEntidad } from '../utils/entidades';
 import { puedeAccederCierreCaja, esGerenteOperaciones, esSuperusuario } from '../utils/permisos';
 import ModalVisorComprobante from '../components/ModalVisorComprobante';
@@ -1011,7 +1011,7 @@ const CierreCaja = () => {
                                 <span className="text-[8px] font-black uppercase tracking-wider mt-0.5">PDF</span>
                               </div>
                             ) : (
-                              <img src={det.adj_cajachica} alt="Comprobante" className="w-full h-full object-cover" />
+                              <img src={resolverUrlAdjunto(det.adj_cajachica)} alt="Comprobante" className="w-full h-full object-cover" />
                             )}
                             <div className="absolute inset-0 bg-brand-dark/40 opacity-0 group-hover/img:opacity-100 flex items-center justify-center text-white transition-opacity">
                               <Eye size={15} />

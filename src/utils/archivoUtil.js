@@ -91,3 +91,39 @@ export const subgastoExigeAdjunto = (detalleOSubgasto, listaSubgastosCatalogo = 
 
   return true;
 };
+
+/**
+ * Normaliza la URL de un comprobante para compatibilidad tanto en desarrollo local
+ * (Docker en Windows o Linux) como en producción (detrás de IIS o Nginx).
+ * Convierte URLs locales absolutas en rutas relativas para que pasen por el proxy/host actual.
+ */
+export const resolverUrlAdjunto = (archivo) => {
+  if (!archivo) return '';
+
+  if (archivo instanceof File || archivo instanceof Blob) {
+    return URL.createObjectURL(archivo);
+  }
+
+  if (typeof archivo !== 'string') return '';
+
+  const urlLimpia = archivo.trim();
+  if (!urlLimpia) return '';
+
+  if (urlLimpia.startsWith('blob:') || urlLimpia.startsWith('data:')) {
+    return urlLimpia;
+  }
+
+  // Si apunta a localhost, 127.0.0.1 o el dominio propio del sistema, convertir a ruta relativa
+  if (/^https?:\/\/(localhost|127\.0\.0\.1|appsurgicorperu\.com)(:\d+)?/i.test(urlLimpia)) {
+    const rutaRelativa = urlLimpia.replace(/^https?:\/\/[^/]+/i, '');
+    return rutaRelativa.startsWith('/') ? rutaRelativa : `/${rutaRelativa}`;
+  }
+
+  // Si es un recurso externo independiente (SharePoint, Azure Blob, S3), respetarlo
+  if (/^https?:\/\//i.test(urlLimpia)) {
+    return urlLimpia;
+  }
+
+  // Si es una ruta relativa sin barra inicial (ej: NewAPI/static/...), anteponer '/'
+  return urlLimpia.startsWith('/') ? urlLimpia : `/${urlLimpia}`;
+};

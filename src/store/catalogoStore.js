@@ -146,13 +146,29 @@ export const useCatalogoStore = create((set, get) => ({
         tipo: e.tipo || MAPA_TIPO_POR_ID[e.id] || '',
       }));
 
-      console.log(`[Catálogos] ✅ Tablas maestras cargadas: Tipos (${tiposData.length}), Subgastos (${subData.length}), Entidades (${entData.length}), Provincias (${provData.length}), Empresas (${emprNormalizadas.length}), Placas (${placasData.length}).`);
+      // Asegurar que cada provincia tenga su identificador numérico `id`
+      const provNormalizadas = (provData || []).map((p) => {
+        let idNum = p.id;
+        if (idNum === undefined || idNum === null) {
+          if (typeof p.url === 'string') {
+            const urlLimpia = p.url.split('?')[0].replace(/\/+$/, '');
+            const num = parseInt(urlLimpia.split('/').filter(Boolean).pop(), 10);
+            idNum = isNaN(num) ? null : num;
+          }
+        }
+        return {
+          ...p,
+          id: idNum,
+        };
+      });
+
+      console.log(`[Catálogos] ✅ Tablas maestras cargadas: Tipos (${tiposData.length}), Subgastos (${subData.length}), Entidades (${entData.length}), Provincias (${provNormalizadas.length}), Empresas (${emprNormalizadas.length}), Placas (${placasData.length}).`);
 
       set({
         tiposGasto: tiposData,
         subgastos: subData,
         entidades: entData,
-        provincias: provData,
+        provincias: provNormalizadas,
         empresas: emprNormalizadas,
         placas: placasData,
         cargando: false

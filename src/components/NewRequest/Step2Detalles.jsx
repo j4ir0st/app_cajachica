@@ -27,7 +27,7 @@ import { useUserStore } from '../../store/userStore';
 import { useCatalogoStore } from '../../store/catalogoStore';
 import { fetchAuth } from '../../utils/fetchAuth';
 import { obtenerTipoCaja, LISTA_EMPRESAS, extraerIdEmpresa } from '../../utils/tipoCaja';
-import { esArchivoPdf, subgastoExigeAdjunto } from '../../utils/archivoUtil';
+import { esArchivoPdf, subgastoExigeAdjunto, resolverUrlAdjunto } from '../../utils/archivoUtil';
 import ModalVisorComprobante from '../ModalVisorComprobante';
 import Combobox from '../Combobox';
 import { formatearNombreEntidad, formatearSubtituloEntidad, esEntidadValidaEntrega } from '../../utils/entidades';
@@ -52,7 +52,7 @@ const DESTINOS_COMUNES_PROVINCIA = [
   { clave: 'CHICLAYO', nombre: 'CHICLAYO' },
   { clave: 'PIURA', nombre: 'PIURA' },
   { clave: 'HUARAZ', nombre: 'HUARAZ' },
-  { clave: 'CUZCO', nombre: 'CUZCO' },
+  { clave: 'CUSCO', nombre: 'CUSCO' },
 ];
 
 // RUCs de empresas administradas internamente (no permitidas como emisor/proveedor)
@@ -102,8 +102,17 @@ const obtenerDetalleVacio = () => ({
 const extraerIdDeUrl = (idOUri) => {
   if (!idOUri) return null;
   if (typeof idOUri === 'number') return idOUri;
+  if (typeof idOUri === 'object' && idOUri !== null) {
+    if (idOUri.id !== undefined && idOUri.id !== null) {
+      const num = parseInt(idOUri.id, 10);
+      return isNaN(num) ? null : num;
+    }
+    if (idOUri.url) return extraerIdDeUrl(idOUri.url);
+    return null;
+  }
   if (typeof idOUri === 'string') {
-    const partes = idOUri.split('/').filter(Boolean);
+    const urlLimpia = idOUri.split('?')[0].replace(/\/+$/, '');
+    const partes = urlLimpia.split('/').filter(Boolean);
     const ultimo = partes[partes.length - 1];
     const num = parseInt(ultimo, 10);
     return isNaN(num) ? null : num;
@@ -207,7 +216,7 @@ const esChoferDelUsuario = (placaItem, user) => {
 /**
  * Paso 2: Registro guiado de comprobantes de gasto con sub-wizard móvil y reglas reactivas.
  */
-const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLimite }) => {
+const Step2Detalles = ({ detalles = [], onChangeDetalles, onEliminarDetalle, montoLimite }) => {
   const { user } = useUserStore();
   const { tiposGasto, subgastos, entidades, provincias, empresas, placas, cargando, error: errorCatalogo, cargarCatalogos } = useCatalogoStore();
 
@@ -283,12 +292,14 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
     return match?.url || formulario.tipogasto_url;
   }, [formulario.tipogasto_url, tiposGastoDisponibles]);
 
-  // Valor normalizado para el select de Subgasto
+  // Valor normalizado para el select de Subgasto (revisa en lista filtrada y catálogo global)
   const valorSubgastoSeleccionado = useMemo(() => {
-    if (!formulario.subgasto_url) return '';
-    const match = subgastosPorTipo.find((s) => coincidenUrlsOIds(s.url, formulario.subgasto_url));
-    return match?.url || formulario.subgasto_url;
-  }, [formulario.subgasto_url, subgastosPorTipo]);
+    if (!formulario.subgasto_url && !formulario.subgasto_obj) return '';
+    const match =
+      subgastosPorTipo.find((s) => coincidenUrlsOIds(s.url || s.id, formulario.subgasto_url) || (formulario.subgasto_obj?.id && s.id === formulario.subgasto_obj.id)) ||
+      subgastos.find((s) => coincidenUrlsOIds(s.url || s.id, formulario.subgasto_url) || (formulario.subgasto_obj?.id && s.id === formulario.subgasto_obj.id));
+    return match?.url || formulario.subgasto_url || '';
+  }, [formulario.subgasto_url, formulario.subgasto_obj, subgastosPorTipo, subgastos]);
 
   // Objeto completo del subgasto activo seleccionado
   const subgastoActivo = useMemo(() => {
@@ -296,7 +307,7 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
     return (
       subgastos.find(
         (s) =>
-          coincidenUrlsOIds(s.url, formulario.subgasto_url) ||
+          coincidenUrlsOIds(s.url || s.id, formulario.subgasto_url) ||
           (formulario.subgasto_obj?.id && s.id === formulario.subgasto_obj.id)
       ) ||
       formulario.subgasto_obj ||
@@ -307,19 +318,54 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
   // Opciones formateadas para Combobox tipo PowerApps
   const opcionesSubgasto = useMemo(() => {
     return subgastosPorTipo.map((s) => ({
-      value: s.url,
+      value: s.url || (s.id ? `${API_URL}/RC_SubGasto/${s.id}/` : String(s.id)),
+      id: s.id,
       label: s.nombre,
       sublabel: s.mensaje_detalle || '',
     }));
   }, [subgastosPorTipo]);
 
   const opcionesProvincias = useMemo(() => {
-    return provincias.map((p) => ({
-      value: p.url,
-      label: p.nombre,
-      sublabel: p.departamento ? `Dpto: ${p.departamento}` : '',
-    }));
-  }, [provincias]);
+    const lista = (provincias || []).map((p) => {
+      const idProv = p.id ?? extraerIdDeUrl(p.url);
+      const urlProv = p.url || (idProv ? `${API_URL}/RC_Provincia/${idProv}/` : String(idProv));
+      return {
+        value: urlProv,
+        id: idProv,
+        label: p.nombre,
+        sublabel: p.departamento ? `Dpto: ${p.departamento}` : '',
+        raw: { ...p, id: idProv },
+      };
+    });
+
+    if (formulario.provincia_id && !lista.some((opt) => opt.id === formulario.provincia_id)) {
+      const idF = formulario.provincia_id;
+      const nomF = formulario.provincia_nombre || `Provincia #${idF}`;
+      lista.unshift({
+        value: `${API_URL}/RC_Provincia/${idF}/`,
+        id: idF,
+        label: nomF,
+        sublabel: '',
+        raw: { id: idF, nombre: nomF },
+      });
+    }
+
+    return lista;
+  }, [provincias, formulario.provincia_id, formulario.provincia_nombre]);
+
+  // Valor normalizado para el select de Provincia
+  const valorProvinciaSeleccionado = useMemo(() => {
+    if (!formulario.provincia_url && !formulario.provincia_id && !formulario.provincia_nombre) return '';
+    const idBuscado = formulario.provincia_id || extraerIdDeUrl(formulario.provincia_url);
+    const nomBuscado = normalizarTexto(formulario.provincia_nombre);
+
+    const match = (opcionesProvincias || []).find((opt) =>
+      (idBuscado !== null && (opt.id === idBuscado || extraerIdDeUrl(opt.value) === idBuscado)) ||
+      (nomBuscado && normalizarTexto(opt.label) === nomBuscado)
+    );
+
+    return match?.value || formulario.provincia_url || (idBuscado ? `${API_URL}/RC_Provincia/${idBuscado}/` : '');
+  }, [formulario.provincia_url, formulario.provincia_id, formulario.provincia_nombre, opcionesProvincias]);
 
   // Determina si el concepto activo o seleccionado corresponde a Distribución Provincia
   const esGastoDistribucionProvincia = useMemo(() => {
@@ -340,9 +386,9 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
       provincias.find((p) => {
         const normP = normalizarTexto(p.nombre || '');
         if (busq === 'cuzco' || busq === 'cusco') {
-          return normP === 'cusco' || normP === 'cuzco';
+          return normP === 'cusco' || normP === 'cuzco' || normP.includes('cusco') || normP.includes('cuzco');
         }
-        return normP === busq;
+        return normP === busq || normP.includes(busq) || busq.includes(normP);
       }) || null
     );
   };
@@ -352,11 +398,21 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
     setErrorLocal('');
     const prov = resolverProvinciaPorNombre(claveDestino);
     if (prov) {
-      const urlProv = prov.url || (prov.id ? `${API_URL}/RC_Provincia/${prov.id}/` : null);
+      const idProv = prov.id ?? extraerIdDeUrl(prov.url);
+      const urlProv = prov.url || (idProv ? `${API_URL}/RC_Provincia/${idProv}/` : null);
       setFormulario((prev) => ({
         ...prev,
         lima_provincia: 'P',
         provincia_url: urlProv,
+        provincia_id: idProv,
+        provincia_nombre: prov.nombre,
+        provincia_obj: { ...prov, id: idProv },
+      }));
+    } else {
+      setFormulario((prev) => ({
+        ...prev,
+        lima_provincia: 'P',
+        provincia_nombre: claveDestino,
       }));
     }
   };
@@ -746,7 +802,7 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
   // ============================================================================
 
   const totalActual = useMemo(() => {
-    return detalles.reduce((acc, d) => acc + (parseFloat(d.costo) || 0), 0);
+    return (detalles || []).reduce((acc, d) => acc + (parseFloat(d.costo) || 0), 0);
   }, [detalles]);
 
   const superaLimite = montoLimite && totalActual > parseFloat(montoLimite);
@@ -790,11 +846,37 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
         (item.subgasto_obj?.id && s.id === item.subgasto_obj.id)
     ) || item.subgasto_obj;
 
+    const tipoMatch = tiposGasto.find((t) =>
+      coincidenUrlsOIds(t.url, item.tipogasto_url) ||
+      coincidenUrlsOIds(t.url, sub?.tipogasto_id) ||
+      (sub?.tipogasto_id?.id && t.id === sub.tipogasto_id.id)
+    );
+
     const tipoUrl =
+      tipoMatch?.url ||
       item.tipogasto_url ||
       sub?.tipogasto_id?.url ||
       (sub?.tipogasto_id?.id ? `${API_URL}/RC_TipoGasto/${sub.tipogasto_id.id}/` : null) ||
       sub?.tipogasto_id;
+
+    // Normalizar provincia_url usando el catálogo de provincias
+    const provRawItem = item.provincia_obj || item.provincia_id || item.provincia_url || item.provincia;
+    const idProvItem = typeof provRawItem === 'object' && provRawItem !== null ? provRawItem.id : (typeof provRawItem === 'number' ? provRawItem : extraerIdDeUrl(provRawItem));
+    const nomProvItem = typeof provRawItem === 'object' && provRawItem !== null ? (provRawItem.nombre || '') : (item.provincia_nombre || '');
+
+    const matchProvincia = (provincias || []).find((p) =>
+      (idProvItem !== null && (p.id === idProvItem || extraerIdDeUrl(p.url) === idProvItem)) ||
+      (nomProvItem && normalizarTexto(p.nombre) === normalizarTexto(nomProvItem))
+    );
+
+    const provinciaUrl =
+      matchProvincia?.url ||
+      (matchProvincia?.id ? `${API_URL}/RC_Provincia/${matchProvincia.id}/` : null) ||
+      (idProvItem ? `${API_URL}/RC_Provincia/${idProvItem}/` : null) ||
+      item.provincia_url ||
+      null;
+    const provinciaId = matchProvincia?.id || idProvItem || null;
+    const provinciaNombre = matchProvincia?.nombre || nomProvItem || '';
 
     let placaId = item.placa_id;
     let placaTexto = item.placa || '';
@@ -823,8 +905,11 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
       placa: placaTexto,
       placa_nombre: placaNombre,
       tipogasto_url: tipoUrl || item.tipogasto_url,
-      subgasto_url: item.subgasto_url || sub?.url,
+      subgasto_url: sub?.url || item.subgasto_url,
       subgasto_obj: sub || item.subgasto_obj,
+      provincia_url: provinciaUrl,
+      provincia_id: provinciaId,
+      provincia_nombre: provinciaNombre,
     });
     setEditandoIdx(idx);
     setPasoWizard(1);
@@ -1005,7 +1090,7 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
                           </div>
                         ) : (
                           <img
-                            src={det._preview || (typeof det.adj_cajachica === 'string' ? det.adj_cajachica : '')}
+                            src={resolverUrlAdjunto(det._preview || det.adj_cajachica)}
                             alt="Comprobante"
                             className="w-full h-full object-cover"
                           />
@@ -1304,8 +1389,11 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
                             const provItem = resolverProvinciaPorNombre(destino.clave);
                             const seleccionado = Boolean(
                               provItem &&
-                              formulario.provincia_url &&
-                              coincidenUrlsOIds(formulario.provincia_url, provItem.url || provItem.id)
+                              (
+                                (formulario.provincia_url && coincidenUrlsOIds(formulario.provincia_url, provItem.url || provItem.id)) ||
+                                (formulario.provincia_id && provItem.id === formulario.provincia_id) ||
+                                (formulario.provincia_nombre && normalizarTexto(formulario.provincia_nombre) === normalizarTexto(destino.nombre))
+                              )
                             );
 
                             return (
@@ -1338,10 +1426,18 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
                         </label>
                         <Combobox
                           options={opcionesProvincias}
-                          value={formulario.provincia_url}
-                          onChange={(val) => {
-                            manejarCambio('provincia_url', val);
-                            manejarCambio('lima_provincia', 'P');
+                          value={valorProvinciaSeleccionado}
+                          onChange={(val, opt) => {
+                            const provObj = opt?.raw || (provincias || []).find((p) => p.id === opt?.id || coincidenUrlsOIds(p.url, val));
+                            const idProv = opt?.id ?? provObj?.id ?? extraerIdDeUrl(val) ?? null;
+                            setFormulario((prev) => ({
+                              ...prev,
+                              lima_provincia: 'P',
+                              provincia_url: val,
+                              provincia_id: idProv,
+                              provincia_nombre: opt?.label || provObj?.nombre || '',
+                              provincia_obj: provObj ? { ...provObj, id: idProv } : null,
+                            }));
                           }}
                           placeholder="Buscar entre todas las provincias..."
                           icon={<MapPin size={14} className="text-brand-primary" />}
@@ -1391,8 +1487,19 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
                           </label>
                           <Combobox
                             options={opcionesProvincias}
-                            value={formulario.provincia_url}
-                            onChange={(val) => manejarCambio('provincia_url', val)}
+                            value={valorProvinciaSeleccionado}
+                            onChange={(val, opt) => {
+                              const provObj = opt?.raw || (provincias || []).find((p) => p.id === opt?.id || coincidenUrlsOIds(p.url, val));
+                              const idProv = opt?.id ?? provObj?.id ?? extraerIdDeUrl(val) ?? null;
+                              setFormulario((prev) => ({
+                                ...prev,
+                                lima_provincia: 'P',
+                                provincia_url: val,
+                                provincia_id: idProv,
+                                provincia_nombre: opt?.label || provObj?.nombre || '',
+                                provincia_obj: provObj ? { ...provObj, id: idProv } : null,
+                              }));
+                            }}
                             placeholder="Buscar provincia..."
                             icon={<MapPin size={14} className="text-brand-primary" />}
                             minParaBusqueda={6}
@@ -1755,7 +1862,7 @@ const Step2Detalles = ({ detalles, onChangeDetalles, onEliminarDetalle, montoLim
                           </div>
                         ) : (
                           <img
-                            src={formulario._preview || (typeof formulario.adj_cajachica === 'string' ? formulario.adj_cajachica : '')}
+                            src={resolverUrlAdjunto(formulario._preview || formulario.adj_cajachica)}
                             alt="Vista previa comprobante"
                             className="w-16 h-16 object-cover rounded-xl border border-gray-200 shrink-0 bg-white"
                           />

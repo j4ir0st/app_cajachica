@@ -36,7 +36,7 @@ import { useUserStore } from '../store/userStore';
 import { useCatalogoStore } from '../store/catalogoStore';
 import { fetchAuth, extraerMensajeError } from '../utils/fetchAuth';
 import { obtenerTipoCaja, resolverClaveTipoIndividual } from '../utils/tipoCaja';
-import { esArchivoPdf } from '../utils/archivoUtil';
+import { esArchivoPdf, resolverUrlAdjunto } from '../utils/archivoUtil';
 import { resolverRutaOEntidad, esGastoTipoTaxi } from '../utils/entidades';
 import { puedeAccederBalanceSemanal, esGerenteOperaciones, esSuperusuario } from '../utils/permisos';
 import ModalVisorComprobante from '../components/ModalVisorComprobante';
@@ -2224,7 +2224,7 @@ const BalanceSemanal = () => {
                                   <span className="text-[7px] font-black uppercase tracking-wider mt-0.5">PDF</span>
                                 </div>
                               ) : (
-                                <img src={det.adj_cajachica} alt="Comprobante" className="w-full h-full object-cover" />
+                                <img src={resolverUrlAdjunto(det.adj_cajachica)} alt="Comprobante" className="w-full h-full object-cover" />
                               )}
                             </button>
                           ) : (

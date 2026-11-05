@@ -119,8 +119,17 @@ export const esEntidadValidaEntrega = (ent) => {
 export const extraerIdDeUrl = (urlOId) => {
   if (!urlOId) return null;
   if (typeof urlOId === 'number') return urlOId;
+  if (typeof urlOId === 'object' && urlOId !== null) {
+    if (urlOId.id !== undefined && urlOId.id !== null) {
+      const num = parseInt(urlOId.id, 10);
+      return isNaN(num) ? null : num;
+    }
+    if (urlOId.url) return extraerIdDeUrl(urlOId.url);
+    return null;
+  }
   if (typeof urlOId === 'string') {
-    const partes = urlOId.split('/').filter(Boolean);
+    const urlLimpia = urlOId.split('?')[0].replace(/\/+$/, '');
+    const partes = urlLimpia.split('/').filter(Boolean);
     const ultimo = partes[partes.length - 1];
     const num = parseInt(ultimo, 10);
     return isNaN(num) ? null : num;

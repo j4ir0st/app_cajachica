@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { ArrowLeft, ArrowRight, Send, Save, X, AlertCircle } from 'lucide-react';
 import { useUserStore } from '../store/userStore';
+import { useCatalogoStore } from '../store/catalogoStore';
 import { fetchAuth } from '../utils/fetchAuth';
 import Stepper from '../components/NewRequest/Stepper';
 import Step1Cabecera from '../components/NewRequest/Step1Cabecera';
@@ -45,11 +46,42 @@ const cabeceraInicial = {
 const extraerId = (idOUri) => {
   if (!idOUri) return null;
   if (typeof idOUri === 'number') return idOUri;
+  if (typeof idOUri === 'object' && idOUri !== null) {
+    if (idOUri.id !== undefined && idOUri.id !== null) {
+      const num = parseInt(idOUri.id, 10);
+      return isNaN(num) ? null : num;
+    }
+    if (idOUri.url) return extraerId(idOUri.url);
+    return null;
+  }
   if (typeof idOUri === 'string') {
-    const partes = idOUri.split('/').filter(Boolean);
+    const urlLimpia = idOUri.split('?')[0].replace(/\/+$/, '');
+    const partes = urlLimpia.split('/').filter(Boolean);
     const ultimo = partes[partes.length - 1];
     const num = parseInt(ultimo, 10);
     return isNaN(num) ? null : num;
+  }
+  return null;
+};
+
+/**
+ * Normaliza la URL de usuario para apuntar siempre al endpoint /users/ de DRF.
+ */
+const construirUrlUsuario = (val) => {
+  if (!val) return null;
+  if (typeof val === 'object') {
+    if (val.url && !val.url.includes('/Usuario/')) return val.url;
+    if (val.id) return `${API_URL}/users/${val.id}/`;
+  }
+  if (typeof val === 'number') return `${API_URL}/users/${val}/`;
+  if (typeof val === 'string') {
+    if (val.includes('/Usuario/')) {
+      const id = extraerId(val);
+      return id ? `${API_URL}/users/${id}/` : val.replace('/Usuario/', '/users/');
+    }
+    if (val.startsWith('http') || val.startsWith('/')) return val;
+    const num = parseInt(val, 10);
+    return isNaN(num) ? val : `${API_URL}/users/${num}/`;
   }
   return null;
 };
@@ -61,7 +93,7 @@ const mapearCabeceraExistente = (req) => {
   if (!req) return cabeceraInicial;
   const usuarioObj = (req.usuario_id && typeof req.usuario_id === 'object') ? req.usuario_id : null;
   const usuarioId = usuarioObj?.id || (typeof req.usuario_id === 'number' || typeof req.usuario_id === 'string' ? req.usuario_id : null);
-  const usuarioUrl = usuarioObj?.url || (usuarioId ? `${API_URL}/Usuario/${usuarioId}/` : null);
+  const usuarioUrl = construirUrlUsuario(usuarioObj?.url) || (usuarioId ? `${API_URL}/users/${usuarioId}/` : null);
   const usuarioNombre = usuarioObj?.full_name || usuarioObj?.username || req.created_by || '';
 
   const areaObj = (req.area_id && typeof req.area_id === 'object') ? req.area_id : null;
@@ -75,6 +107,7 @@ const mapearCabeceraExistente = (req) => {
   return {
     id: req.id || extraerId(req.url),
     url: req.url || (req.id ? `${API_URL}/Requerimiento_CajaChica/${req.id}/` : null),
+    estado_requerimiento: req.estado_requerimiento || 'PD',
     area_id: areaId,
     area_url: areaUrl,
     area_nombre: areaNombre,
@@ -86,6 +119,44 @@ const mapearCabeceraExistente = (req) => {
     fecha_solicitud: req.fecha_solicitud ? req.fecha_solicitud.slice(0, 16) : '',
     empresa_id: empresaId,
   };
+};
+
+/**
+ * Determina si el requerimiento se encuentra en estado Cerrado (CD).
+ */
+const esPedidoCerrado = (estado) => {
+  if (!estado) return false;
+  if (typeof estado === 'string') {
+    const lim = estado.trim().toUpperCase();
+    return lim === 'CD' || lim === 'CERRADO';
+  }
+  if (typeof estado === 'object') {
+    if (estado.id) return esPedidoCerrado(estado.id);
+    if (estado.codigo) return esPedidoCerrado(estado.codigo);
+    if (estado.estado) return esPedidoCerrado(estado.estado);
+    const claves = Object.keys(estado);
+    return claves.some((k) => k.toUpperCase() === 'CD' || k.toUpperCase() === 'CERRADO');
+  }
+  return false;
+};
+
+/**
+ * Determina si el requerimiento se encuentra en estado Liquidado (LQ).
+ */
+const esPedidoLiquidado = (estado) => {
+  if (!estado) return false;
+  if (typeof estado === 'string') {
+    const lim = estado.trim().toUpperCase();
+    return lim === 'LQ' || lim === 'LIQUIDADO';
+  }
+  if (typeof estado === 'object') {
+    if (estado.id) return esPedidoLiquidado(estado.id);
+    if (estado.codigo) return esPedidoLiquidado(estado.codigo);
+    if (estado.estado) return esPedidoLiquidado(estado.estado);
+    const claves = Object.keys(estado);
+    return claves.some((k) => k.toUpperCase() === 'LQ' || k.toUpperCase() === 'LIQUIDADO');
+  }
+  return false;
 };
 
 const extraerEntidadUrl = (ent) => {
@@ -101,6 +172,48 @@ const extraerProvinciaUrl = (prov) => {
   if (typeof prov === 'object') return prov.url || (prov.id ? `${API_URL}/RC_Provincia/${prov.id}/` : null);
   if (typeof prov === 'string') return prov.startsWith('http') ? prov : `${API_URL}/RC_Provincia/${extraerId(prov) || prov}/`;
   if (typeof prov === 'number') return `${API_URL}/RC_Provincia/${prov}/`;
+  return null;
+};
+
+/**
+ * Resuelve de forma exhaustiva el ID numérico de la provincia para gastos en provincia ('P').
+ */
+const resolverIdProvincia = (det, catalogoProvincias = []) => {
+  if (!det || det.lima_provincia !== 'P') return null;
+
+  // 1. Si ya tiene provincia_id numérico
+  const idDirecto = extraerId(det.provincia_id);
+  if (idDirecto) return idDirecto;
+
+  // 2. Extraer de provincia_obj
+  if (det.provincia_obj) {
+    const idObj = extraerId(det.provincia_obj.id || det.provincia_obj.url);
+    if (idObj) return idObj;
+  }
+
+  // 3. Extraer de provincia_url
+  if (det.provincia_url) {
+    const idUrl = extraerId(det.provincia_url);
+    if (idUrl) return idUrl;
+  }
+
+  // 4. Buscar por coincidencia de nombre o provincia en catalogoProvincias
+  const nombreBuscado = (det.provincia_nombre || det.provincia || '').toString().trim().toUpperCase();
+  if (nombreBuscado && Array.isArray(catalogoProvincias)) {
+    const normBuscado = nombreBuscado.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    const provMatch = catalogoProvincias.find((p) => {
+      const normP = (p.nombre || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toUpperCase();
+      if ((normBuscado === 'CUZCO' || normBuscado === 'CUSCO') && (normP === 'CUSCO' || normP === 'CUZCO')) {
+        return true;
+      }
+      return normP === normBuscado || normP.includes(normBuscado) || normBuscado.includes(normP);
+    });
+    if (provMatch) {
+      const idMatch = extraerId(provMatch.id || provMatch.url);
+      if (idMatch) return idMatch;
+    }
+  }
+
   return null;
 };
 
@@ -205,6 +318,12 @@ const mapearDetallesExistentes = (detallesLista) => {
     const placaTexto = d.placa || d.placa_detalle?.placa || d.placa_nombre || '';
     const placaNombre = d.placa_nombre || (d.placa_detalle?.chofer ? `${d.placa_detalle.placa} - ${d.placa_detalle.chofer}` : placaTexto);
 
+    // Extracción de datos de provincia
+    const provRaw = d.provincia_id || d.provincia || d.provincia_url || d.provincia_detalle;
+    const provId = (typeof provRaw === 'object' && provRaw !== null) ? provRaw.id : (typeof provRaw === 'number' ? provRaw : null);
+    const provNombre = (typeof provRaw === 'object' && provRaw !== null) ? (provRaw.nombre || '') : (typeof d.provincia === 'string' && isNaN(Number(d.provincia)) ? d.provincia : (d.provincia_nombre || ''));
+    const provUrl = extraerProvinciaUrl(provRaw);
+
     return {
       id: idNum,
       url: d.url || (idNum ? `${API_URL}/RC_Detalle/${idNum}/` : null),
@@ -212,7 +331,10 @@ const mapearDetallesExistentes = (detallesLista) => {
       subgasto_url: subgastoUrl,
       subgasto_obj: subgastoObj,
       lima_provincia: d.lima_provincia || 'L',
-      provincia_url: extraerProvinciaUrl(d.provincia_id),
+      provincia_url: provUrl,
+      provincia_id: provId,
+      provincia_nombre: provNombre,
+      provincia_obj: (typeof provRaw === 'object' && provRaw !== null) ? provRaw : null,
       empresa_id: extraerEmpresaId(d.empresa_id !== undefined ? d.empresa_id : d.empresa),
       nro_factura: d.nro_factura || '',
       nro_ruc: d.nro_ruc || '',
@@ -266,7 +388,7 @@ const extraerMensajeError = async (respuesta) => {
 /**
  * Valida de forma estricta los datos para el estado Liquidado (LQ).
  */
-const validarParaLiquidacion = (cabecera, detalles, montoFinal, totalGastos) => {
+const validarParaLiquidacion = (cabecera, detalles, montoFinal, totalGastos, catalogoProvincias = []) => {
   if (!Array.isArray(detalles) || detalles.length === 0) {
     return 'Debe registrar al menos un comprobante de gasto para liquidar.';
   }
@@ -289,8 +411,11 @@ const validarParaLiquidacion = (cabecera, detalles, montoFinal, totalGastos) => 
       return `El gasto #${nro} tiene un importe inválido.`;
     }
 
-    if (d.lima_provincia === 'P' && !d.provincia_url) {
-      return `El gasto #${nro} está marcado para Provincia pero no tiene provincia seleccionada.`;
+    if (d.lima_provincia === 'P') {
+      const idProv = resolverIdProvincia(d, catalogoProvincias);
+      if (!idProv) {
+        return `El comprobante #${nro} está marcado para Provincia pero no tiene provincia seleccionada.`;
+      }
     }
 
     const rucLimpio = String(d.nro_ruc || '').trim();
@@ -316,6 +441,7 @@ const NewRequest = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const { user } = useUserStore();
+  const { provincias } = useCatalogoStore();
 
   const requerimientoAEditar = location.state?.requerimientoAEditar || null;
   const esModoEdicion = !!requerimientoAEditar;
@@ -367,10 +493,10 @@ const NewRequest = () => {
         return;
       }
     }
-    setDetalles((prev) => prev.filter((_, i) => i !== idx));
+    setDetalles((prev) => (prev || []).filter((_, i) => i !== idx));
   };
 
-  const totalGastos = detalles.reduce((acc, d) => acc + (parseFloat(d.costo) || 0), 0);
+  const totalGastos = (detalles || []).reduce((acc, d) => acc + (parseFloat(d.costo) || 0), 0);
   const montoSolicitadoNum = parseFloat(cabecera.monto_solicitado || 0);
   const montoFinal = montoSolicitadoNum > 0 ? montoSolicitadoNum : totalGastos;
 
@@ -392,9 +518,12 @@ const NewRequest = () => {
   const enviarSolicitud = async (estadoDestino = 'LQ') => {
     setNotificacion(null);
 
+    const esCerrado = esPedidoCerrado(cabecera?.estado_requerimiento);
+    const esLiquidado = esPedidoLiquidado(cabecera?.estado_requerimiento);
+
     // Si se envía como Liquidado (LQ), exigir todas las reglas y saldo cero
     if (estadoDestino === 'LQ') {
-      const errorValidacion = validarParaLiquidacion(cabecera, detalles, montoFinal, totalGastos);
+      const errorValidacion = validarParaLiquidacion(cabecera, detalles, montoFinal, totalGastos, provincias);
       if (errorValidacion) {
         setNotificacion({
           tipo: 'advertencia',
@@ -405,7 +534,24 @@ const NewRequest = () => {
       }
     }
 
+    // Validación preventiva de provincia para todos los comprobantes registrados
+    for (let i = 0; i < detalles.length; i++) {
+      const det = detalles[i];
+      if (det.lima_provincia === 'P') {
+        const idProv = resolverIdProvincia(det, provincias);
+        if (!idProv) {
+          setNotificacion({
+            tipo: 'advertencia',
+            titulo: 'Provincia no Encontrada',
+            mensaje: `El comprobante #${i + 1} está marcado para Provincia pero no se pudo identificar una provincia válida en el sistema. Por favor selecciónela nuevamente.`,
+          });
+          return;
+        }
+      }
+    }
+
     setEnviando(true);
+    let idRequerimientoCreado = null;
     try {
       const idReqExistente = cabecera.id || extraerId(cabecera.url);
 
@@ -417,13 +563,16 @@ const NewRequest = () => {
         const cabeceraPayload = {
           monto_solicitado: montoFinal.toFixed(2),
           total_gastado: totalGastos.toFixed(2),
-          estado_requerimiento: 'PD',
           obs: cabecera.obs || '',
           fecha_solicitud: cabecera.fecha_solicitud,
           empresa_id: cabecera.empresa_id || null,
         };
+
+        if (estadoDestino === 'PD') {
+          cabeceraPayload.estado_requerimiento = 'PD';
+        }
         if (cabecera.usuario_id) {
-          cabeceraPayload.usuario_id = cabecera.usuario_url || `${API_URL}/users/${cabecera.usuario_id}/`;
+          cabeceraPayload.usuario_id = construirUrlUsuario(cabecera.usuario_url) || `${API_URL}/users/${cabecera.usuario_id}/`;
         }
         if (cabecera.area_id) {
           const areaNum = typeof cabecera.area_id === 'number' || /^\d+$/.test(cabecera.area_id) ? Number(cabecera.area_id) : null;
@@ -456,7 +605,7 @@ const NewRequest = () => {
           const esNuevo = !idDetalle;
           const tieneArchivoNuevo = det.adj_cajachica instanceof File || det.adj_cajachica instanceof Blob;
           const subUrl = det.subgasto_url || extraerSubgastoUrl(det.subgasto_obj);
-          const provUrl = det.lima_provincia === 'P' ? (det.provincia_url || extraerProvinciaUrl(det.provincia_id)) : null;
+          const idProvincia = resolverIdProvincia(det, provincias);
           const origUrl = det.origen_url || extraerEntidadUrl(det.origen);
           const destUrl = det.destino_url || extraerEntidadUrl(det.destino);
 
@@ -466,7 +615,7 @@ const NewRequest = () => {
           if (subUrl) formData.append('subgasto_id', subUrl);
           formData.append('lima_provincia', det.lima_provincia || 'L');
 
-          if (provUrl) formData.append('provincia_id', provUrl);
+          if (idProvincia) formData.append('provincia_id', String(idProvincia));
           if (det.nro_factura) formData.append('nro_factura', det.nro_factura);
           if (det.nro_ruc) formData.append('nro_ruc', det.nro_ruc);
           if (det.razon_social) formData.append('razon_social', det.razon_social);
@@ -536,8 +685,8 @@ const NewRequest = () => {
           setDetalles([...detallesSincronizados, ...detalles.slice(idx + 1)]);
         }
 
-        // 3. Transición final a Liquidado (LQ) solo después de haber guardado todos los detalles
-        if (estadoDestino === 'LQ') {
+        // 3. Transición final a Liquidado (LQ) solo si el usuario pulsa Liquidar y no estaba liquidado o cerrado
+        if (estadoDestino === 'LQ' && !esCerrado && !esLiquidado) {
           const resLiq = await fetchAuth(
             `${API_URL}/Requerimiento_CajaChica/${idReqExistente}/liquidar/?format=json`,
             {
@@ -553,9 +702,9 @@ const NewRequest = () => {
         }
       } else {
         // --------------------------------------------------------------------
-        // MODO CREACIÓN: POST NUEVO REQUERIMIENTO EN 'PD' Y COMPROBANTES
+        // MODO CREACIÓN: POST NUEVO REQUERIMIENTO DIRECTAMENTE EN ESTADO DESTINO
         // --------------------------------------------------------------------
-        const usuarioHyperlink = cabecera.usuario_url || user?.url || (cabecera.usuario_id ? `${API_URL}/users/${cabecera.usuario_id}/` : null);
+        const usuarioHyperlink = construirUrlUsuario(cabecera.usuario_url) || construirUrlUsuario(user?.url) || (cabecera.usuario_id ? `${API_URL}/users/${cabecera.usuario_id}/` : null);
         const areaValor = cabecera.area_id || user?.area_id || cabecera.area || user?.area || null;
         let areaHyperlink = cabecera.area_url || user?.area_url || null;
         if (!areaHyperlink && areaValor) {
@@ -566,13 +715,13 @@ const NewRequest = () => {
           }
         }
 
-        // Se crea siempre inicialmente en 'PD' para poder asociar los comprobantes
+        // Se crea directamente en el estado solicitado (LQ si es liquidación final o PD si es borrador)
         const cabeceraPayload = {
           area_id: areaHyperlink,
           usuario_id: usuarioHyperlink,
           monto_solicitado: montoFinal.toFixed(2),
           total_gastado: totalGastos.toFixed(2),
-          estado_requerimiento: 'PD',
+          estado_requerimiento: estadoDestino,
           obs: cabecera.obs || '',
           fecha_solicitud: cabecera.fecha_solicitud,
           created_by: usuarioHyperlink,
@@ -594,6 +743,7 @@ const NewRequest = () => {
 
         const requerimientoCreado = await resRequerimiento.json();
         const requerimientoId = requerimientoCreado.id || extraerId(requerimientoCreado.url);
+        idRequerimientoCreado = requerimientoId;
         const requerimientoUrl = requerimientoCreado.url || `${API_URL}/Requerimiento_CajaChica/${requerimientoId}/`;
 
         // Actualizar el estado de la cabecera para que cualquier reintento opere como edición
@@ -601,6 +751,7 @@ const NewRequest = () => {
           ...prev,
           id: requerimientoId,
           url: requerimientoUrl,
+          estado_requerimiento: estadoDestino,
         }));
 
         // Registrar o actualizar cada detalle asociado al requerimiento recién creado de forma secuencial
@@ -612,7 +763,7 @@ const NewRequest = () => {
             const esNuevo = !idDetalle;
             const tieneArchivoNuevo = det.adj_cajachica instanceof File || det.adj_cajachica instanceof Blob;
             const subUrl = det.subgasto_url || extraerSubgastoUrl(det.subgasto_obj);
-            const provUrl = det.lima_provincia === 'P' ? (det.provincia_url || extraerProvinciaUrl(det.provincia_id)) : null;
+            const idProvincia = resolverIdProvincia(det, provincias);
             const origUrl = det.origen_url || extraerEntidadUrl(det.origen);
             const destUrl = det.destino_url || extraerEntidadUrl(det.destino);
 
@@ -622,7 +773,7 @@ const NewRequest = () => {
             if (subUrl) formData.append('subgasto_id', subUrl);
             formData.append('lima_provincia', det.lima_provincia || 'L');
 
-            if (provUrl) formData.append('provincia_id', provUrl);
+            if (idProvincia) formData.append('provincia_id', String(idProvincia));
             if (det.nro_factura) formData.append('nro_factura', det.nro_factura);
             if (det.nro_ruc) formData.append('nro_ruc', det.nro_ruc);
             if (det.razon_social) formData.append('razon_social', det.razon_social);
@@ -696,32 +847,34 @@ const NewRequest = () => {
             setDetalles([...detallesSincronizados, ...detalles.slice(idx + 1)]);
           }
         }
-
-        // Si el usuario eligió Enviar y Liquidar, ejecutar la liquidación ahora que ya existen los detalles
-        if (estadoDestino === 'LQ' && requerimientoId) {
-          const resLiq = await fetchAuth(
-            `${API_URL}/Requerimiento_CajaChica/${requerimientoId}/liquidar/?format=json`,
-            {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ obs: cabecera.obs || 'Rendición liquidada' }),
-            }
-          );
-          if (!resLiq.ok) {
-            const errLiq = await extraerMensajeError(resLiq);
-            throw new Error(errLiq);
-          }
-        }
       }
 
       const mensaje =
-        estadoDestino === 'LQ'
-          ? '¡Rendición de caja chica liquidada y enviada con éxito!'
-          : 'Se guardó su requerimiento como Pendiente (Borrador). Puede continuar llenándolo en Mis Solicitudes.';
+        estadoDestino === 'CD'
+          ? '¡Requerimiento actualizado correctamente!'
+          : estadoDestino === 'LQ'
+            ? '¡Rendición de caja chica liquidada y enviada con éxito!'
+            : 'Se guardó su requerimiento como Pendiente (Borrador). Puede continuar llenándolo en Mis Solicitudes.';
 
       const rutaDestino = location.state?.desdeRuta || '/mis-solicitudes';
       navigate(rutaDestino, { state: { exito: mensaje } });
     } catch (err) {
+      // Revertir requerimiento huérfano si falló durante la creación inicial
+      if (!esModoEdicion && idRequerimientoCreado) {
+        try {
+          await fetchAuth(`${API_URL}/Requerimiento_CajaChica/${idRequerimientoCreado}/?format=json`, {
+            method: 'DELETE',
+          });
+          setCabecera((prev) => ({
+            ...prev,
+            id: null,
+            url: null,
+          }));
+        } catch (errRollback) {
+          console.error('Error al revertir requerimiento huérfano:', errRollback);
+        }
+      }
+
       setNotificacion({
         tipo: 'error',
         titulo: 'Error al Guardar Requerimiento',
@@ -811,11 +964,10 @@ const NewRequest = () => {
               <button
                 onClick={irSiguiente}
                 disabled={!pasoValido}
-                className={`flex items-center gap-1.5 px-5 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all ${
-                  pasoValido
+                className={`flex items-center gap-1.5 px-5 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all ${pasoValido
                     ? 'bg-brand-primary text-white hover:bg-brand-secondary hover:shadow-md hover:shadow-brand-primary/20'
                     : 'bg-gray-100 text-gray-300 cursor-not-allowed'
-                }`}
+                  }`}
               >
                 <span>Siguiente</span>
                 <ArrowRight size={15} />
@@ -833,15 +985,20 @@ const NewRequest = () => {
                   <span>Guardar Borrador</span>
                 </button>
 
-                <button
-                  type="button"
-                  onClick={() => enviarSolicitud('LQ')}
-                  disabled={enviando}
-                  className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 text-white text-xs font-black shadow-md shadow-blue-500/20 hover:scale-[1.02] transition-all disabled:opacity-50"
-                >
-                  <Send size={14} />
-                  <span>{enviando ? 'Enviando...' : 'Enviar y Liquidar'}</span>
-                </button>
+                {(() => {
+                  const esCerrado = esPedidoCerrado(cabecera?.estado_requerimiento);
+                  return (
+                    <button
+                      type="button"
+                      onClick={() => enviarSolicitud(esCerrado ? 'CD' : 'LQ')}
+                      disabled={enviando}
+                      className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 text-white text-xs font-black shadow-md shadow-blue-500/20 hover:scale-[1.02] transition-all disabled:opacity-50"
+                    >
+                      <Send size={14} />
+                      <span>{enviando ? 'Enviando...' : (esCerrado ? 'Enviar' : 'Liquidar')}</span>
+                    </button>
+                  );
+                })()}
               </div>
             )}
           </div>

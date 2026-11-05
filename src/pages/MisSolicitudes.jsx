@@ -18,13 +18,14 @@ import {
   X,
   FileText,
   Trash2,
-  MapPin
+  MapPin,
+  Send
 } from 'lucide-react';
 import { useUserStore } from '../store/userStore';
 import { useCatalogoStore } from '../store/catalogoStore';
 import { fetchAuth } from '../utils/fetchAuth';
 import { obtenerTipoCaja } from '../utils/tipoCaja';
-import { esArchivoPdf, subgastoExigeAdjunto } from '../utils/archivoUtil';
+import { esArchivoPdf, subgastoExigeAdjunto, resolverUrlAdjunto } from '../utils/archivoUtil';
 import { resolverRutaOEntidad } from '../utils/entidades';
 import ModalVisorComprobante from '../components/ModalVisorComprobante';
 import Toast from '../components/Toast';
@@ -193,11 +194,12 @@ const MisSolicitudes = () => {
     }
 
     const items = solicitudSeleccionada.detalle || solicitudSeleccionada.detalles;
-    if (Array.isArray(items) && items.length > 0) {
+    const tieneDetallesObjetos = Array.isArray(items) && items.length > 0 && typeof items[0] === 'object' && items[0] !== null;
+    if (tieneDetallesObjetos) {
       setDetallesModal(items);
       console.log(`[MisSolicitudes] ✅ Mostrando ${items.length} comprobantes para Requerimiento #${solicitudSeleccionada.id}`);
     } else {
-      // Si la lista vino sin detalle anidado, consultar el requerimiento individual o los comprobantes directos
+      // Si la lista vino sin detalle anidado o vino como hiperenlaces (strings), consultar el requerimiento individual o los comprobantes directos
       const cargarDetallesRemotos = async () => {
         setCargandoDetallesModal(true);
         try {
@@ -206,7 +208,8 @@ const MisSolicitudes = () => {
           if (resReq.ok) {
             const dataReq = await resReq.json();
             const itemsReq = dataReq.detalle || dataReq.detalles;
-            if (Array.isArray(itemsReq) && itemsReq.length > 0) {
+            const tieneDetallesObjetosReq = Array.isArray(itemsReq) && itemsReq.length > 0 && typeof itemsReq[0] === 'object' && itemsReq[0] !== null;
+            if (tieneDetallesObjetosReq) {
               setDetallesModal(itemsReq);
               console.log(`[MisSolicitudes] ✅ Cargados ${itemsReq.length} comprobantes desde detalle para Requerimiento #${solicitudSeleccionada.id}`);
               return;
@@ -945,7 +948,7 @@ const MisSolicitudes = () => {
                                     </div>
                                   ) : (
                                     <img
-                                      src={det.adj_cajachica}
+                                      src={resolverUrlAdjunto(det.adj_cajachica)}
                                       alt="Comprobante"
                                       className="w-full h-full object-cover"
                                     />
@@ -1057,7 +1060,7 @@ const MisSolicitudes = () => {
                     className="w-full flex items-center justify-center gap-2 py-3 px-4 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-black text-xs rounded-xl shadow-md shadow-blue-500/20 transition-all disabled:opacity-50"
                   >
                     <Send size={14} />
-                    {liquidando ? 'Liquidando Solicitud...' : 'ENVIAR Y LIQUIDAR REQUERIMIENTO'}
+                    {liquidando ? 'Liquidando Solicitud...' : 'LIQUIDAR REQUERIMIENTO'}
                   </button>
                 </div>
               )}

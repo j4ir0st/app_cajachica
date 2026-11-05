@@ -51,10 +51,49 @@ const Combobox = ({
   // Determinar si esta lista requiere búsqueda (> 6 opciones por regla de negocio)
   const requiereBusqueda = options.length > minParaBusqueda;
 
-  // Encontrar la opción actualmente seleccionada
+  // Encontrar la opción actualmente seleccionada con soporte de coincidencia exacta y flexible por ID/URL
   const opcionSeleccionada = useMemo(() => {
     if (value === null || value === undefined || value === '') return null;
-    return options.find((opt) => String(opt.value) === String(value)) || null;
+
+    // 1. Coincidencia directa por valor
+    const matchExacto = options.find((opt) => String(opt.value) === String(value));
+    if (matchExacto) return matchExacto;
+
+    // 2. Coincidencia flexible por ID para URLs absolutas/relativas, objetos y números
+    const extraerIdentificador = (val) => {
+      if (val === null || val === undefined || val === '') return null;
+      if (typeof val === 'number') return val;
+      if (typeof val === 'object' && val.id !== undefined && val.id !== null) {
+        const num = parseInt(val.id, 10);
+        return isNaN(num) ? null : num;
+      }
+      if (typeof val === 'string') {
+        const urlLimpia = val.split('?')[0].replace(/\/+$/, '');
+        const partes = urlLimpia.split('/').filter(Boolean);
+        const ultimo = partes[partes.length - 1];
+        const num = parseInt(ultimo, 10);
+        return isNaN(num) ? null : num;
+      }
+      return null;
+    };
+
+    const idBuscado = extraerIdentificador(value);
+    if (idBuscado !== null) {
+      const matchPorId = options.find((opt) => extraerIdentificador(opt.value) === idBuscado || opt.id === idBuscado);
+      if (matchPorId) return matchPorId;
+    }
+
+    // 3. Coincidencia por texto/label normalizado
+    if (typeof value === 'string' && value.trim()) {
+      const valorLimpio = value.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+      const matchPorLabel = options.find((opt) => {
+        const optLabel = String(opt.label || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+        return optLabel === valorLimpio;
+      });
+      if (matchPorLabel) return matchPorLabel;
+    }
+
+    return null;
   }, [options, value]);
 
   // Filtrado en memoria de alta velocidad
