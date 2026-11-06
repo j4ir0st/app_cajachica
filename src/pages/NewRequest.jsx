@@ -552,6 +552,7 @@ const NewRequest = () => {
 
     setEnviando(true);
     let idRequerimientoCreado = null;
+    let algunDetalleGuardado = false;
     try {
       const idReqExistente = cabecera.id || extraerId(cabecera.url);
 
@@ -711,20 +712,21 @@ const NewRequest = () => {
           if (typeof areaValor === 'string' && areaValor.startsWith('http')) {
             areaHyperlink = areaValor;
           } else if (typeof areaValor === 'number' || (typeof areaValor === 'string' && /^\d+$/.test(areaValor))) {
-            areaHyperlink = `${API_URL}/Area/${areaValor}/`;
+            areaHyperlink = `${API_URL}/EU_Area/${areaValor}/`;
           }
         }
 
-        // Se crea directamente en el estado solicitado (LQ si es liquidación final o PD si es borrador)
+        // Siempre se crea en estado inicial 'PD' (Borrador) para permitir insertar los comprobantes sin violar restricciones de DB
         const cabeceraPayload = {
           area_id: areaHyperlink,
           usuario_id: usuarioHyperlink,
           monto_solicitado: montoFinal.toFixed(2),
           total_gastado: totalGastos.toFixed(2),
-          estado_requerimiento: estadoDestino,
+          estado_requerimiento: 'PD',
           obs: cabecera.obs || '',
           fecha_solicitud: cabecera.fecha_solicitud,
           created_by: usuarioHyperlink,
+          empresa_id: cabecera.empresa_id || null,
         };
 
         const resRequerimiento = await fetchAuth(
@@ -751,7 +753,7 @@ const NewRequest = () => {
           ...prev,
           id: requerimientoId,
           url: requerimientoUrl,
-          estado_requerimiento: estadoDestino,
+          estado_requerimiento: 'PD',
         }));
 
         // Registrar o actualizar cada detalle asociado al requerimiento recién creado de forma secuencial
@@ -843,9 +845,30 @@ const NewRequest = () => {
             }
 
             detallesSincronizados.push(itemSincronizado);
+            algunDetalleGuardado = true;
             // Sincronizar progresivamente el estado con los IDs asignados
             setDetalles([...detallesSincronizados, ...detalles.slice(idx + 1)]);
           }
+        }
+
+        // Si el usuario eligió liquidar directamente (LQ), realizar la transición mediante el endpoint oficial
+        if (estadoDestino === 'LQ') {
+          const resLiq = await fetchAuth(
+            `${API_URL}/Requerimiento_CajaChica/${requerimientoId}/liquidar/?format=json`,
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ obs: cabecera.obs || 'Rendición finalizada y liquidada' }),
+            }
+          );
+          if (!resLiq.ok) {
+            const errLiq = await extraerMensajeError(resLiq);
+            throw new Error(errLiq);
+          }
+          setCabecera((prev) => ({
+            ...prev,
+            estado_requerimiento: 'LQ',
+          }));
         }
       }
 
@@ -859,8 +882,8 @@ const NewRequest = () => {
       const rutaDestino = location.state?.desdeRuta || '/mis-solicitudes';
       navigate(rutaDestino, { state: { exito: mensaje } });
     } catch (err) {
-      // Revertir requerimiento huérfano si falló durante la creación inicial
-      if (!esModoEdicion && idRequerimientoCreado) {
+      // Revertir requerimiento huérfano si falló durante la creación inicial y no tiene comprobantes guardados
+      if (!esModoEdicion && idRequerimientoCreado && !algunDetalleGuardado) {
         try {
           await fetchAuth(`${API_URL}/Requerimiento_CajaChica/${idRequerimientoCreado}/?format=json`, {
             method: 'DELETE',
@@ -871,7 +894,7 @@ const NewRequest = () => {
             url: null,
           }));
         } catch (errRollback) {
-          console.error('Error al revertir requerimiento huérfano:', errRollback);
+          console.warn('Error al revertir requerimiento huérfano:', errRollback);
         }
       }
 
