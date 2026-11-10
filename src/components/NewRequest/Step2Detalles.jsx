@@ -76,6 +76,7 @@ const obtenerDetalleVacio = () => ({
   lima_provincia: 'L',
   provincia_url: null,
   empresa_id: null,
+  proveedor_id: null,
   nro_factura: '',
   nro_ruc: '',
   razon_social: '',
@@ -218,7 +219,7 @@ const esChoferDelUsuario = (placaItem, user) => {
  */
 const Step2Detalles = ({ detalles = [], onChangeDetalles, onEliminarDetalle, montoLimite }) => {
   const { user } = useUserStore();
-  const { tiposGasto, subgastos, entidades, provincias, empresas, placas, cargando, error: errorCatalogo, cargarCatalogos } = useCatalogoStore();
+  const { tiposGasto, subgastos, entidades, provincias, empresas, placas, proveedores, agregarProveedorLocal, cargando, error: errorCatalogo, cargarCatalogos } = useCatalogoStore();
 
   const listaEmpresasDisponibles = useMemo(() => {
     return Array.isArray(empresas) && empresas.length > 0 ? empresas : LISTA_EMPRESAS;
@@ -233,6 +234,13 @@ const Step2Detalles = ({ detalles = [], onChangeDetalles, onEliminarDetalle, mon
   const [consultandoRuc, setConsultandoRuc] = useState(false);
   const [mensajeRuc, setMensajeRuc] = useState(null);
   const [mostrarCampoManualRazonSocial, setMostrarCampoManualRazonSocial] = useState(false);
+
+  // Estados para nuevo proveedor rápido
+  const [modoCrearProveedor, setModoCrearProveedor] = useState(false);
+  const [nuevoProveedor, setNuevoProveedor] = useState({ nro_ruc: '', razon_social: '', nombre_comercial: '' });
+  const [guardandoProveedor, setGuardandoProveedor] = useState(false);
+  const [consultandoRucProveedorSunat, setConsultandoRucProveedorSunat] = useState(false);
+  const [avisoRucProveedor, setAvisoRucProveedor] = useState(null);
 
   const referenciaCamara = useRef(null);
   const referenciaArchivo = useRef(null);
@@ -476,6 +484,50 @@ const Step2Detalles = ({ detalles = [], onChangeDetalles, onEliminarDetalle, mon
     }));
   }, [placas, placaDelUsuario, formulario.placa_id]);
 
+  // Nombres comerciales de los 4 proveedores más comunes
+  const PROVEEDORES_COMUNES = ['OLTURSA', 'LIMA EXPRESA', 'CRUZ DEL SUR', 'INVERSIONES URBANISTICAS'];
+
+  // Opciones para el Combobox de Proveedores
+  const opcionesProveedores = useMemo(() => {
+    if (!Array.isArray(proveedores) || proveedores.length === 0) return [];
+    return proveedores.map((p) => {
+      const nombreComercial = (p.nombre_comercial || '').trim();
+      const razonSocial = (p.razon_social || '').trim();
+      const ruc = (p.nro_ruc || '').trim();
+
+      // Buscador debe permitir buscar y mostrar el nombre comercial, si no tiene recién buscar por razón social
+      const label = nombreComercial || razonSocial || `Proveedor #${p.id}`;
+      const sublabel = nombreComercial
+        ? `${razonSocial} • RUC: ${ruc}`
+        : (ruc ? `RUC: ${ruc}` : '');
+
+      return {
+        value: p.id,
+        label,
+        sublabel,
+        busquedaExtra: `${nombreComercial} ${razonSocial} ${ruc}`,
+        raw: p,
+      };
+    });
+  }, [proveedores]);
+
+  // Proveedores comunes identificados en el catálogo
+  const proveedoresComunesEncontrados = useMemo(() => {
+    if (!Array.isArray(proveedores) || proveedores.length === 0) return [];
+    return PROVEEDORES_COMUNES.map((nomComun) => {
+      const nomNorm = normalizarTexto(nomComun);
+      const encontrado = proveedores.find((p) => {
+        const nc = normalizarTexto(p.nombre_comercial || '');
+        const rz = normalizarTexto(p.razon_social || '');
+        return nc.includes(nomNorm) || rz.includes(nomNorm);
+      });
+      return {
+        nombre: nomComun,
+        proveedor: encontrado || null,
+      };
+    });
+  }, [proveedores]);
+
   // ============================================================================
   // MANEJADORES DE CAMBIO Y REGLAS REACTIVAS DEL FORMULARIO
   // ============================================================================
@@ -674,6 +726,141 @@ const Step2Detalles = ({ detalles = [], onChangeDetalles, onEliminarDetalle, mon
     setMostrarCampoManualRazonSocial(true);
   };
 
+  // Manejador para seleccionar proveedor desde Combobox o botones directos
+  const seleccionarProveedor = (provId, opt = null) => {
+    setErrorLocal('');
+    if (!provId) {
+      setFormulario((prev) => ({
+        ...prev,
+        proveedor_id: null,
+        nro_ruc: '',
+        razon_social: '',
+      }));
+      return;
+    }
+
+    const provObj = opt?.raw || (proveedores || []).find((p) => p.id === provId || String(p.id) === String(provId));
+    if (provObj) {
+      setFormulario((prev) => ({
+        ...prev,
+        proveedor_id: provObj.id,
+        nro_ruc: provObj.nro_ruc || '',
+        razon_social: provObj.razon_social || '',
+      }));
+    }
+  };
+
+  /**
+   * Consulta de RUC SUNAT para nuevo proveedor rápido en Step2Detalles.
+   */
+  const consultarRucNuevoProveedor = async (ruc) => {
+    const rucLimpio = String(ruc || '').trim();
+    if (rucLimpio.length !== 11) return;
+
+    if (RUCS_EMPRESAS_PROPIAS[rucLimpio]) {
+      setAvisoRucProveedor({
+        tipo: 'error',
+        texto: `El RUC ingresado pertenece a ${RUCS_EMPRESAS_PROPIAS[rucLimpio]}. Ingrese el RUC del proveedor externo.`,
+      });
+      return;
+    }
+
+    if (rucLimpio.startsWith('10')) {
+      setAvisoRucProveedor({
+        tipo: 'advertencia',
+        texto: 'La consulta automática solo permite RUC 20. Ingrese la Razón Social de forma manual.',
+      });
+      return;
+    }
+
+    if (rucLimpio.startsWith('20')) {
+      setConsultandoRucProveedorSunat(true);
+      setAvisoRucProveedor(null);
+      try {
+        const res = await fetch(`https://openruc.com/api/ruc/${rucLimpio}`);
+        if (res.ok) {
+          const datos = await res.json();
+          if (datos && datos.razon_social) {
+            const rz = String(datos.razon_social).trim();
+            setNuevoProveedor((prev) => ({ ...prev, razon_social: rz }));
+            setAvisoRucProveedor({
+              tipo: 'exito',
+              texto: `SUNAT: ${rz}`,
+            });
+          } else {
+            setAvisoRucProveedor({
+              tipo: 'error',
+              texto: 'No se obtuvo razón social de SUNAT. Ingrésela manualmente.',
+            });
+          }
+        } else {
+          setAvisoRucProveedor({
+            tipo: 'error',
+            texto: 'No se encontró información en SUNAT. Ingrese la razón social manualmente.',
+          });
+        }
+      } catch (err) {
+        setAvisoRucProveedor({
+          tipo: 'error',
+          texto: 'Error al consultar SUNAT. Ingrese la razón social manualmente.',
+        });
+      } finally {
+        setConsultandoRucProveedorSunat(false);
+      }
+      return;
+    }
+
+    setAvisoRucProveedor({
+      tipo: 'advertencia',
+      texto: 'RUC con formato no estándar. Ingrese la razón social manualmente.',
+    });
+  };
+
+  /**
+   * Creación rápida de proveedor desde Step2Detalles.
+   */
+  const manejarCrearProveedorRapido = async (e) => {
+    if (e) e.preventDefault();
+    if (!nuevoProveedor.nro_ruc.trim() || !nuevoProveedor.razon_social.trim()) {
+      setErrorLocal('Ingrese el RUC y la Razón Social del nuevo proveedor.');
+      return;
+    }
+
+    setGuardandoProveedor(true);
+    setErrorLocal('');
+    try {
+      const cuerpo = {
+        nro_ruc: nuevoProveedor.nro_ruc.trim(),
+        razon_social: nuevoProveedor.razon_social.trim().toUpperCase(),
+      };
+      if (nuevoProveedor.nombre_comercial && nuevoProveedor.nombre_comercial.trim()) {
+        cuerpo.nombre_comercial = nuevoProveedor.nombre_comercial.trim().toUpperCase();
+      }
+
+      const res = await fetchAuth(`${API_URL}/RC_Proveedor/`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(cuerpo),
+      });
+
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.detail || errJson.nro_ruc || 'Error al guardar proveedor.');
+      }
+
+      const provCreado = await res.json();
+      agregarProveedorLocal(provCreado);
+      seleccionarProveedor(provCreado.id, { raw: provCreado });
+      setModoCrearProveedor(false);
+      setNuevoProveedor({ nro_ruc: '', razon_social: '', nombre_comercial: '' });
+      setAvisoRucProveedor(null);
+    } catch (err) {
+      setErrorLocal(err.message || 'No se pudo crear el proveedor.');
+    } finally {
+      setGuardandoProveedor(false);
+    }
+  };
+
   // Auto-selección automática de placa si el subgasto exige placa y el usuario = chofer
   React.useEffect(() => {
     if (modalAbierto && subgastoActivo?.requiere_placa && placaDelUsuario) {
@@ -828,6 +1015,9 @@ const Step2Detalles = ({ detalles = [], onChangeDetalles, onEliminarDetalle, mon
     setErrorLocal('');
     setConsultandoRuc(false);
     setMensajeRuc(null);
+    setModoCrearProveedor(false);
+    setNuevoProveedor({ nro_ruc: '', razon_social: '', nombre_comercial: '' });
+    setAvisoRucProveedor(null);
     setMostrarCampoManualRazonSocial(false);
     setModalAbierto(true);
   };
@@ -897,8 +1087,16 @@ const Step2Detalles = ({ detalles = [], onChangeDetalles, onEliminarDetalle, mon
       }
     }
 
+    // Buscar proveedor correspondiente en el catálogo si existe
+    let provId = item.proveedor_id || null;
+    if (!provId && item.nro_ruc && Array.isArray(proveedores)) {
+      const matchProv = proveedores.find((p) => p.nro_ruc === item.nro_ruc);
+      if (matchProv) provId = matchProv.id;
+    }
+
     setFormulario({
       ...item,
+      proveedor_id: provId,
       empresa_id: extraerIdEmpresa(item.empresa_id !== undefined ? item.empresa_id : item.empresa),
       razon_social: item.razon_social || '',
       placa_id: placaId || null,
@@ -916,6 +1114,9 @@ const Step2Detalles = ({ detalles = [], onChangeDetalles, onEliminarDetalle, mon
     setErrorLocal('');
     setConsultandoRuc(false);
     setMensajeRuc(null);
+    setModoCrearProveedor(false);
+    setNuevoProveedor({ nro_ruc: '', razon_social: '', nombre_comercial: '' });
+    setAvisoRucProveedor(null);
     setMostrarCampoManualRazonSocial(!item.razon_social && !!item.nro_ruc);
     setModalAbierto(true);
   };
@@ -933,6 +1134,9 @@ const Step2Detalles = ({ detalles = [], onChangeDetalles, onEliminarDetalle, mon
     setErrorLocal('');
     setConsultandoRuc(false);
     setMensajeRuc(null);
+    setModoCrearProveedor(false);
+    setNuevoProveedor({ nro_ruc: '', razon_social: '', nombre_comercial: '' });
+    setAvisoRucProveedor(null);
     setMostrarCampoManualRazonSocial(false);
   };
 
@@ -1595,100 +1799,184 @@ const Step2Detalles = ({ detalles = [], onChangeDetalles, onEliminarDetalle, mon
                         )}
                       </div>
 
-                      <div>
-                        <div className="flex items-center justify-between mb-1">
+                      {/* Selector y Gestión de Proveedor */}
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
                           <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider">
-                            N° RUC *
+                            Proveedor *
                           </label>
-                          {consultandoRuc && (
-                            <span className="text-[10px] text-brand-primary font-bold flex items-center gap-1 animate-pulse">
-                              <Loader2 size={11} className="animate-spin" /> Consultando SUNAT...
-                            </span>
-                          )}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setModoCrearProveedor(!modoCrearProveedor);
+                              setNuevoProveedor({ nro_ruc: '', razon_social: '', nombre_comercial: '' });
+                              setAvisoRucProveedor(null);
+                            }}
+                            className="text-[10px] font-bold text-brand-primary hover:underline"
+                          >
+                            {modoCrearProveedor ? 'Cancelar' : '+ Nuevo Proveedor'}
+                          </button>
                         </div>
 
-                        <input
-                          type="text"
-                          maxLength={11}
-                          placeholder="20XXXXXXXXX o 10XXXXXXXXX"
-                          value={formulario.nro_ruc}
-                          onChange={(e) => {
-                            const val = e.target.value.replace(/\D/g, '');
-                            manejarCambio('nro_ruc', val);
-                            if (val.length === 11) {
-                              consultarRucOpenRuc(val);
-                            } else {
-                              setMensajeRuc(null);
-                              setErrorLocal('');
-                            }
-                          }}
-                          className={`w-full bg-white border-2 rounded-xl px-4 py-2.5 text-sm font-semibold outline-none transition-colors ${RUCS_EMPRESAS_PROPIAS[formulario.nro_ruc]
-                              ? 'border-red-400 focus:border-red-600 bg-red-50/40 text-red-800 ring-2 ring-red-100'
-                              : 'border-gray-100 focus:border-brand-primary text-brand-dark'
-                            }`}
-                        />
-
-                        {/* Razón Social detectada en pequeño debajo del RUC */}
-                        {formulario.razon_social && !mostrarCampoManualRazonSocial && !RUCS_EMPRESAS_PROPIAS[formulario.nro_ruc] && (
-                          <div className="mt-1.5 flex items-center justify-between text-xs text-emerald-800 bg-emerald-50/90 border border-emerald-200 rounded-xl px-3 py-1.5 animate-fade-in">
-                            <div className="flex items-center gap-1.5 min-w-0">
-                              <Building size={13} className="text-emerald-600 shrink-0" />
-                              <span className="font-bold text-[11px] truncate uppercase tracking-tight">
-                                {formulario.razon_social}
-                              </span>
+                        {/* Botones directos con los 4 proveedores más comunes */}
+                        {!modoCrearProveedor && (
+                          <div className="space-y-1">
+                            <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block">
+                              Proveedores frecuentes:
+                            </span>
+                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+                              {proveedoresComunesEncontrados.map((item) => {
+                                const estaSeleccionado = item.proveedor && formulario.proveedor_id === item.proveedor.id;
+                                return (
+                                  <button
+                                    key={item.nombre}
+                                    type="button"
+                                    onClick={() => {
+                                      if (item.proveedor) {
+                                        seleccionarProveedor(item.proveedor.id, { raw: item.proveedor });
+                                      } else {
+                                        // Si aún no está en la BD con ese nombre, preparamos el formulario de nuevo proveedor
+                                        setModoCrearProveedor(true);
+                                        setNuevoProveedor((prev) => ({
+                                          ...prev,
+                                          nombre_comercial: item.nombre,
+                                        }));
+                                      }
+                                    }}
+                                    className={`px-2 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-tight transition-all border text-center truncate ${
+                                      estaSeleccionado
+                                        ? 'bg-brand-primary text-white border-brand-primary shadow-xs ring-2 ring-brand-primary/20'
+                                        : 'bg-white text-gray-700 border-gray-200 hover:border-brand-primary hover:bg-brand-light/40'
+                                    }`}
+                                    title={item.nombre}
+                                  >
+                                    {item.nombre}
+                                  </button>
+                                );
+                              })}
                             </div>
-                            <button
-                              type="button"
-                              onClick={() => setMostrarCampoManualRazonSocial(true)}
-                              className="text-[10px] text-brand-primary hover:underline ml-2 font-bold shrink-0"
-                            >
-                              Editar
-                            </button>
                           </div>
                         )}
 
-                        {/* Mensaje de aviso de OpenRUC o advertencia de RUC propio */}
-                        {mensajeRuc && (
-                          <div className={`p-2.5 rounded-xl border mt-1.5 text-[11px] font-semibold leading-relaxed animate-fade-in ${mensajeRuc.tipo === 'error'
-                              ? 'bg-red-50 text-red-700 border-red-200'
-                              : mensajeRuc.tipo === 'advertencia'
-                                ? 'bg-amber-50 text-amber-800 border-amber-200'
-                                : 'bg-emerald-50 text-emerald-800 border-emerald-200'
-                            }`}>
-                            <div className="flex items-start gap-1.5">
-                              <AlertCircle size={14} className="shrink-0 mt-0.5" />
-                              <span>{mensajeRuc.texto}</span>
+                        {/* Formulario de creación rápida de Proveedor */}
+                        {modoCrearProveedor ? (
+                          <div className="p-3 bg-brand-light/60 border border-brand-primary/20 rounded-xl space-y-2.5 animate-fade-in">
+                            <span className="text-[11px] font-black text-brand-dark uppercase tracking-wider block">
+                              Registrar Nuevo Proveedor
+                            </span>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                              <div className="relative">
+                                <input
+                                  type="text"
+                                  placeholder="N° RUC (11 dígitos) *"
+                                  maxLength={11}
+                                  value={nuevoProveedor.nro_ruc}
+                                  onChange={(e) => {
+                                    const val = e.target.value.replace(/\D/g, '');
+                                    setNuevoProveedor((prev) => ({ ...prev, nro_ruc: val }));
+                                    if (val.length === 11) {
+                                      consultarRucNuevoProveedor(val);
+                                    } else {
+                                      setAvisoRucProveedor(null);
+                                    }
+                                  }}
+                                  className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-gray-200 outline-none font-mono focus:border-brand-primary bg-white"
+                                />
+                                {consultandoRucProveedorSunat && (
+                                  <div className="absolute right-2.5 top-1/2 -translate-y-1/2">
+                                    <Loader2 size={13} className="animate-spin text-brand-primary" />
+                                  </div>
+                                )}
+                              </div>
+
+                              <input
+                                type="text"
+                                placeholder="Razón Social *"
+                                value={nuevoProveedor.razon_social}
+                                onChange={(e) => setNuevoProveedor({ ...nuevoProveedor, razon_social: e.target.value.toUpperCase() })}
+                                className="px-2.5 py-1.5 text-xs rounded-lg border border-gray-200 outline-none uppercase focus:border-brand-primary bg-white"
+                              />
                             </div>
+
+                            {/* Nombre comercial opcional */}
+                            <div>
+                              <input
+                                type="text"
+                                placeholder="Nombre Comercial (Opcional)"
+                                value={nuevoProveedor.nombre_comercial}
+                                onChange={(e) => setNuevoProveedor({ ...nuevoProveedor, nombre_comercial: e.target.value.toUpperCase() })}
+                                className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-gray-200 outline-none uppercase focus:border-brand-primary bg-white"
+                              />
+                            </div>
+
+                            {/* Aviso de validación RUC / SUNAT */}
+                            {avisoRucProveedor && (
+                              <div
+                                className={`p-2 rounded-lg border text-[11px] font-semibold leading-relaxed animate-fade-in flex items-start gap-1.5 ${
+                                  avisoRucProveedor.tipo === 'error'
+                                    ? 'bg-red-50 text-red-700 border-red-200'
+                                    : avisoRucProveedor.tipo === 'advertencia'
+                                    ? 'bg-amber-50 text-amber-800 border-amber-200'
+                                    : 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                                }`}
+                              >
+                                <AlertCircle size={13} className="shrink-0 mt-0.5" />
+                                <span>{avisoRucProveedor.texto}</span>
+                              </div>
+                            )}
+
+                            <div className="flex justify-end gap-2 pt-1">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setModoCrearProveedor(false);
+                                  setNuevoProveedor({ nro_ruc: '', razon_social: '', nombre_comercial: '' });
+                                  setAvisoRucProveedor(null);
+                                }}
+                                className="px-2.5 py-1 text-gray-500 text-xs font-semibold hover:text-gray-700"
+                              >
+                                Cancelar
+                              </button>
+                              <button
+                                type="button"
+                                onClick={manejarCrearProveedorRapido}
+                                disabled={guardandoProveedor || consultandoRucProveedorSunat}
+                                className="px-3.5 py-1 bg-brand-primary text-white rounded-lg text-xs font-bold hover:bg-brand-secondary transition-all disabled:opacity-50"
+                              >
+                                {guardandoProveedor ? 'Guardando...' : 'Crear y Asignar'}
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          /* Combobox buscador de Proveedor */
+                          <Combobox
+                            options={opcionesProveedores}
+                            value={formulario.proveedor_id}
+                            onChange={(val, opt) => seleccionarProveedor(val, opt)}
+                            placeholder="Buscar proveedor por nombre comercial o razón social..."
+                            icon={<Building size={14} className="text-brand-primary" />}
+                            minParaBusqueda={3}
+                          />
+                        )}
+
+                        {/* Ficha resumen del proveedor seleccionado */}
+                        {formulario.nro_ruc && formulario.razon_social && !modoCrearProveedor && (
+                          <div className="p-2.5 rounded-xl border border-emerald-200 bg-emerald-50/80 text-emerald-900 flex items-center justify-between text-xs animate-fade-in">
+                            <div className="min-w-0 pr-2">
+                              <span className="font-black block truncate uppercase">
+                                {formulario.razon_social}
+                              </span>
+                              <span className="text-[10px] text-emerald-700 font-mono block">
+                                RUC: {formulario.nro_ruc}
+                              </span>
+                            </div>
+                            <span className="shrink-0 text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded-md bg-emerald-200/80 text-emerald-800">
+                              Asignado
+                            </span>
                           </div>
                         )}
                       </div>
-
-                      {/* Campo Manual para Razón Social (si no se obtiene automáticamente, es RUC 10 o el usuario desea editarlo) */}
-                      {(mostrarCampoManualRazonSocial || (!formulario.razon_social && formulario.nro_ruc?.length === 11)) && (
-                        <div className="animate-fade-in">
-                          <div className="flex items-center justify-between mb-1">
-                            <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider">
-                              Razón Social / Proveedor (Manual) *
-                            </label>
-                            {formulario.razon_social && (
-                              <button
-                                type="button"
-                                onClick={() => setMostrarCampoManualRazonSocial(false)}
-                                className="text-[10px] text-gray-400 hover:text-gray-600 font-bold"
-                              >
-                                Ocultar
-                              </button>
-                            )}
-                          </div>
-                          <input
-                            type="text"
-                            placeholder="Ingrese el nombre o razón social del proveedor..."
-                            value={formulario.razon_social}
-                            onChange={(e) => manejarCambio('razon_social', e.target.value.toUpperCase())}
-                            className="w-full bg-white border-2 border-amber-200 focus:border-brand-primary rounded-xl px-4 py-2 text-xs font-semibold text-brand-dark outline-none transition-colors"
-                          />
-                        </div>
-                      )}
 
                       <div>
                         <label className="block text-xs font-bold text-gray-500 mb-1 uppercase tracking-wider">

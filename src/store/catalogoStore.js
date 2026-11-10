@@ -13,6 +13,7 @@ export const useCatalogoStore = create((set, get) => ({
   provincias: [],
   empresas: [],
   placas: [],
+  proveedores: [],
   cargando: false,
   error: null,
 
@@ -125,7 +126,7 @@ export const useCatalogoStore = create((set, get) => ({
     };
 
     try {
-      const [tiposData, subData, entData, provData, emprData, placasData] = await Promise.all([
+      const [tiposData, subData, entData, provData, emprData, placasData, provsData] = await Promise.all([
         resuelveCatalogo(CLAVES_CATALOGO.tiposGasto, `${API_URL}/RC_TipoGasto/?format=json`),
         resuelveCatalogo(CLAVES_CATALOGO.subgastos, `${API_URL}/RC_SubGasto/?format=json`),
         resuelveEntidades(),
@@ -137,6 +138,7 @@ export const useCatalogoStore = create((set, get) => ({
           { id: 2, nombre: 'BIOPRO PERU SRL', empresa: 'BIOPRO PERU S.R.L.' },
         ]),
         resuelveCatalogo(CLAVES_CATALOGO.placas, `${API_URL}/RC_Placas/?format=json&top=1000`, []),
+        resuelveCatalogo(CLAVES_CATALOGO.proveedores, `${API_URL}/RC_Proveedor/?top=1000&format=json`, []),
       ]);
 
       const MAPA_TIPO_POR_ID = { 1: 'A', 4: 'B', 3: 'D', 2: 'E' };
@@ -162,7 +164,7 @@ export const useCatalogoStore = create((set, get) => ({
         };
       });
 
-      console.log(`[Catálogos] ✅ Tablas maestras cargadas: Tipos (${tiposData.length}), Subgastos (${subData.length}), Entidades (${entData.length}), Provincias (${provNormalizadas.length}), Empresas (${emprNormalizadas.length}), Placas (${placasData.length}).`);
+      console.log(`[Catálogos] ✅ Tablas maestras cargadas: Tipos (${tiposData.length}), Subgastos (${subData.length}), Entidades (${entData.length}), Provincias (${provNormalizadas.length}), Empresas (${emprNormalizadas.length}), Placas (${placasData.length}), Proveedores (${(provsData || []).length}).`);
 
       set({
         tiposGasto: tiposData,
@@ -171,6 +173,7 @@ export const useCatalogoStore = create((set, get) => ({
         provincias: provNormalizadas,
         empresas: emprNormalizadas,
         placas: placasData,
+        proveedores: provsData || [],
         cargando: false
       });
     } catch (err) {
@@ -183,6 +186,19 @@ export const useCatalogoStore = create((set, get) => ({
 
   },
 
+  // Agrega o actualiza un proveedor en el catálogo local y en el caché
+  agregarProveedorLocal: (nuevoProv) => {
+    if (!nuevoProv) return;
+    const listaActual = get().proveedores || [];
+    const idNuevo = nuevoProv.id;
+    const existe = listaActual.some((p) => p.id === idNuevo || p.nro_ruc === nuevoProv.nro_ruc);
+    const nuevaLista = existe
+      ? listaActual.map((p) => (p.id === idNuevo || p.nro_ruc === nuevoProv.nro_ruc ? { ...p, ...nuevoProv } : p))
+      : [nuevoProv, ...listaActual];
+    guardarEnCache(CLAVES_CATALOGO.proveedores, nuevaLista);
+    set({ proveedores: nuevaLista });
+  },
+
   // Limpia el estado de los catálogos
   limpiarCatalogos: () => set({
     tiposGasto: [],
@@ -191,6 +207,7 @@ export const useCatalogoStore = create((set, get) => ({
     provincias: [],
     empresas: [],
     placas: [],
+    proveedores: [],
     error: null
   }),
 }));

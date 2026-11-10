@@ -1111,15 +1111,6 @@ const BalanceSemanal = () => {
               </button>
 
               <button
-                onClick={() => setMostrarModalReporte(true)}
-                className="flex items-center gap-2 px-3 py-2 sm:px-4 sm:py-2 rounded-2xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white text-xs font-black shadow-md shadow-blue-500/20 hover:scale-[1.02] active:scale-[0.98] transition-all"
-                title="Reporte Semanal"
-              >
-                <Printer className="w-5 h-5 sm:w-4 sm:h-4 shrink-0" />
-                <span className="tracking-wide">Reporte Semanal</span>
-              </button>
-
-              <button
                 type="button"
                 onClick={() => setMostrarModalCorreo(true)}
                 className="flex items-center gap-2 px-3 py-2 sm:px-4 sm:py-2 rounded-2xl bg-sky-600 hover:bg-sky-700 text-white text-xs font-black shadow-md shadow-sky-600/20 hover:scale-[1.02] active:scale-[0.98] transition-all"

@@ -16,6 +16,7 @@ export const CLAVES_CATALOGO = {
   provincias: 'cc_cache_provincias',
   empresas: 'cc_cache_empresas',
   placas: 'cc_cache_placas',
+  proveedores: 'cc_cache_proveedores_v1',
   usuarios: 'cc_cache_usuarios_activos_v3',
 };
 

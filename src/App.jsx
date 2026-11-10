@@ -8,11 +8,13 @@ import MisSolicitudes from './pages/MisSolicitudes';
 import CierreCaja from './pages/CierreCaja';
 import Aprobaciones from './pages/Aprobaciones';
 import BalanceSemanal from './pages/BalanceSemanal';
+import RegistroFacturasMayores from './pages/RegistroFacturasMayores';
 import { useUserStore } from './store/userStore';
 import {
   puedeAccederAprobaciones,
   puedeAccederCierreCaja,
-  puedeAccederBalanceSemanal
+  puedeAccederBalanceSemanal,
+  puedeAccederRegistroFacturasMayor
 } from './utils/permisos';
 
 /**
@@ -75,6 +77,14 @@ function App() {
             element={
               <ProtectedRoute permiso={puedeAccederBalanceSemanal}>
                 <BalanceSemanal />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="facturas-mayores"
+            element={
+              <ProtectedRoute permiso={puedeAccederRegistroFacturasMayor}>
+                <RegistroFacturasMayores />
               </ProtectedRoute>
             }
           />

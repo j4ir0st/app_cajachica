@@ -282,6 +282,16 @@ export const esMandoArea = (user) => {
 // ============================================================================
 
 /**
+ * Valida el acceso a Registro de Facturas S/. + (`/facturas-mayores`).
+ * Exclusivo para: Gerente de Operaciones y Superusuario (`is_superuser`).
+ */
+export const puedeAccederRegistroFacturasMayor = (user) => {
+  if (!user) return false;
+  if (esSuperusuario(user)) return true;
+  return esGerenteOperaciones(user);
+};
+
+/**
  * Valida el acceso a Cierre de Caja (`/cierre-caja`).
  * Solo permitido para Gerente de Operaciones y Superusuario.
  * Los administradores (`is_staff`) NO tienen acceso.
@@ -326,6 +336,10 @@ export const puedeAccederRuta = (ruta, user) => {
   const rutaLimpia = ruta.replace(/^\//, '').toLowerCase();
 
   switch (rutaLimpia) {
+    case 'facturas-mayores':
+    case 'registro-facturas':
+      return puedeAccederRegistroFacturasMayor(user);
+
     case 'cierre-caja':
       return puedeAccederCierreCaja(user);
 

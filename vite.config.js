@@ -133,6 +133,21 @@ export default defineConfig(({ mode }) => {
           changeOrigin: true,
           secure: false,
         },
+        '/RC_Proveedor': {
+          target: target,
+          changeOrigin: true,
+          secure: false,
+        },
+        '/RC_Area': {
+          target: target,
+          changeOrigin: true,
+          secure: false,
+        },
+        '/RC_OtrosGastos': {
+          target: target,
+          changeOrigin: true,
+          secure: false,
+        },
         '/media': {
           target: target,
           changeOrigin: true,

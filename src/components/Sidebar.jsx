@@ -11,7 +11,8 @@ import {
   ChevronRight,
   Menu,
   X,
-  CreditCard
+  CreditCard,
+  Receipt
 } from 'lucide-react';
 import { useUserStore } from '../store/userStore';
 import { puedeAccederRuta } from '../utils/permisos';
@@ -58,6 +59,11 @@ const Sidebar = () => {
       title: 'Balance Semanal',
       icon: PieChart,
       path: '/balance',
+    },
+    {
+      title: 'Registro de Facturas S/. +',
+      icon: Receipt,
+      path: '/facturas-mayores',
     },
   ];
 
