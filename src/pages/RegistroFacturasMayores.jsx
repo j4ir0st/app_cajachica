@@ -102,6 +102,7 @@ const RegistroFacturasMayores = () => {
 
   // Modales
   const [modalFormularioAbierto, setModalFormularioAbierto] = useState(false);
+  const [modalConfirmarCerrar, setModalConfirmarCerrar] = useState(false);
   const [pasoFormulario, setPasoFormulario] = useState(1); // Wizard de 2 pasos para no desbordar en móvil
   const [gastoSeleccionado, setGastoSeleccionado] = useState(null);
   const [archivoComprobanteVisor, setArchivoComprobanteVisor] = useState(null);
@@ -223,6 +224,18 @@ const RegistroFacturasMayores = () => {
     cargarOtrosGastos(1);
   }, [cargarOtrosGastos]);
 
+  // Escuchar evento para abrir nueva factura desde el Header
+  useEffect(() => {
+    const manejarAbrirNuevaFactura = () => {
+      abrirModalCrear();
+    };
+
+    window.addEventListener('abrir-modal-nueva-factura', manejarAbrirNuevaFactura);
+    return () => {
+      window.removeEventListener('abrir-modal-nueva-factura', manejarAbrirNuevaFactura);
+    };
+  }, []);
+
   // ============================================================================
   // CÁLCULOS Y RESÚMENES (KPIS)
   // ============================================================================
@@ -296,8 +309,47 @@ const RegistroFacturasMayores = () => {
   };
 
   /**
-   * Valida el paso 1 antes de avanzar al paso 2.
+   * Determina si el formulario contiene información ingresada por el usuario.
    */
+  const formularioTieneDatos = useCallback(() => {
+    if (gastoSeleccionado) {
+      // En modo edición verificamos si hubo algún cambio relevante
+      return true;
+    }
+    return Boolean(
+      formData.nro_factura.trim() ||
+      formData.proveedor_id ||
+      formData.area_id ||
+      (formData.monto && formData.monto !== '') ||
+      formData.motivo.trim() ||
+      formData.detalle.trim() ||
+      formData.adjunto ||
+      nuevoProveedor.nro_ruc.trim() ||
+      nuevoProveedor.razon_social.trim()
+    );
+  }, [formData, gastoSeleccionado, nuevoProveedor]);
+
+  /**
+   * Intenta cerrar el modal del formulario. Si hay datos, pide confirmación.
+   */
+  const intentarCerrarModalFormulario = () => {
+    if (formularioTieneDatos()) {
+      setModalConfirmarCerrar(true);
+    } else {
+      setModalFormularioAbierto(false);
+    }
+  };
+
+  /**
+   * Confirma descartar cambios y cerrar el modal.
+   */
+  const confirmarDescarteYCerrar = () => {
+    setModalConfirmarCerrar(false);
+    setModalFormularioAbierto(false);
+    setFormData(estadoInicialForm);
+    setModoCrearProveedor(false);
+    setNuevoProveedor({ nro_ruc: '', razon_social: '', nombre_comercial: '' });
+  };
   const validarPaso1 = () => {
     if (!formData.nro_factura.trim()) {
       mostrarMensaje('El número de factura o comprobante es obligatorio.', 'error');
@@ -886,7 +938,7 @@ const RegistroFacturasMayores = () => {
       {modalFormularioAbierto && createPortal(
         <div
           className="fixed inset-0 !m-0 z-50 flex items-center justify-center bg-brand-dark/70 backdrop-blur-sm p-3 sm:p-4 overflow-y-auto animate-fade-in"
-          onClick={() => setModalFormularioAbierto(false)}
+          onClick={intentarCerrarModalFormulario}
         >
           <div
             className="bg-white rounded-3xl w-full max-w-lg shadow-2xl border border-gray-100 flex flex-col max-h-[92vh] overflow-hidden animate-scale-up"
@@ -910,7 +962,7 @@ const RegistroFacturasMayores = () => {
 
               <button
                 type="button"
-                onClick={() => setModalFormularioAbierto(false)}
+                onClick={intentarCerrarModalFormulario}
                 className="p-1.5 rounded-xl text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
               >
                 <X size={18} />
@@ -1327,6 +1379,48 @@ const RegistroFacturasMayores = () => {
                   )}
                 </button>
               )}
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {/* ==================================================================== */}
+      {/* MODAL DE CONFIRMACIÓN PARA DESCARTAR Y CERRAR */}
+      {/* ==================================================================== */}
+      {modalConfirmarCerrar && createPortal(
+        <div
+          className="fixed inset-0 !m-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-fade-in"
+          onClick={() => setModalConfirmarCerrar(false)}
+        >
+          <div
+            className="bg-white rounded-3xl w-full max-w-sm p-6 shadow-2xl border border-gray-100 text-center animate-scale-up"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="w-12 h-12 bg-amber-50 text-amber-600 rounded-2xl flex items-center justify-center mx-auto mb-3">
+              <AlertCircle size={26} />
+            </div>
+            <h3 className="text-base font-black text-gray-900 mb-1">
+              ¿Deseas salir del registro?
+            </h3>
+            <p className="text-xs text-gray-500 mb-5 leading-relaxed">
+              Tienes datos ingresados en el formulario. Si sales ahora, se perderá todo tu avance.
+            </p>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setModalConfirmarCerrar(false)}
+                className="py-2.5 px-4 rounded-xl border border-gray-200 text-gray-700 hover:bg-gray-50 font-bold transition-all text-xs"
+              >
+                Continuar Editando
+              </button>
+              <button
+                type="button"
+                onClick={confirmarDescarteYCerrar}
+                className="py-2.5 px-4 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-black text-xs shadow-md shadow-amber-600/20 transition-all"
+              >
+                Sí, Salir
+              </button>
             </div>
           </div>
         </div>,

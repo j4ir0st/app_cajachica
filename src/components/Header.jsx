@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { LogOut, ChevronDown, Bell, User, Search, PlusCircle, Plus, RefreshCw, Settings } from 'lucide-react';
+import { useNavigate, useLocation } from 'react-router-dom';
+import { LogOut, ChevronDown, Bell, User, Search, PlusCircle, Plus, RefreshCw, Settings, Receipt } from 'lucide-react';
 import { useUserStore } from '../store/userStore';
 import { useCatalogoStore } from '../store/catalogoStore';
 import { limpiarCatalogos } from '../utils/catalogoCache';
@@ -18,6 +18,10 @@ const Header = () => {
   const { user, logout } = useUserStore();
   const { cargarCatalogos } = useCatalogoStore();
   const navigate = useNavigate();
+  const location = useLocation();
+
+  // Verifica si el usuario está en la vista de Registro de Facturas S/. +
+  const esVistaFacturasMayores = location.pathname === '/facturas-mayores';
 
   // Cerrar el menú desplegable al hacer clic fuera
   useEffect(() => {
@@ -131,15 +135,26 @@ const Header = () => {
 
       {/* Acciones e Info de Usuario */}
       <div className="flex items-center gap-3 sm:gap-6">
-        {/* Botón Nueva Rendición Destacado */}
-        <button
-          onClick={() => navigate('/nueva-solicitud')}
-          title="Crear Nueva Rendición"
-          className="flex items-center justify-center gap-1.5 sm:gap-2 bg-gradient-to-r from-brand-primary to-brand-secondary text-white font-black text-xs px-2.5 py-2 sm:px-4 sm:py-2.5 rounded-xl sm:rounded-2xl shadow-md shadow-brand-primary/25 hover:shadow-lg hover:shadow-brand-primary/35 hover:scale-105 active:scale-95 transition-all group shrink-0"
-        >
-          <Plus size={22} strokeWidth={3} className="w-5 h-5 sm:w-4 sm:h-4 transition-transform group-hover:rotate-90 duration-300 shrink-0" />
-          <span className="hidden sm:inline tracking-wider">NUEVA RENDICIÓN</span>
-        </button>
+        {/* Botón Principal de Acción (Nueva Rendición o Nueva Factura según la vista actual) */}
+        {esVistaFacturasMayores ? (
+          <button
+            onClick={() => window.dispatchEvent(new CustomEvent('abrir-modal-nueva-factura'))}
+            title="Registrar Nueva Factura"
+            className="flex items-center justify-center gap-1.5 sm:gap-2 bg-gradient-to-r from-teal-600 to-emerald-700 text-white font-black text-xs px-2.5 py-2 sm:px-4 sm:py-2.5 rounded-xl sm:rounded-2xl shadow-md shadow-teal-600/25 hover:shadow-lg hover:shadow-teal-600/35 hover:scale-105 active:scale-95 transition-all group shrink-0"
+          >
+            <Plus size={22} strokeWidth={3} className="w-5 h-5 sm:w-4 sm:h-4 transition-transform group-hover:rotate-90 duration-300 shrink-0" />
+            <span className="hidden sm:inline tracking-wider">NUEVA FACTURA</span>
+          </button>
+        ) : (
+          <button
+            onClick={() => navigate('/nueva-solicitud')}
+            title="Crear Nueva Rendición"
+            className="flex items-center justify-center gap-1.5 sm:gap-2 bg-gradient-to-r from-brand-primary to-brand-secondary text-white font-black text-xs px-2.5 py-2 sm:px-4 sm:py-2.5 rounded-xl sm:rounded-2xl shadow-md shadow-brand-primary/25 hover:shadow-lg hover:shadow-brand-primary/35 hover:scale-105 active:scale-95 transition-all group shrink-0"
+          >
+            <Plus size={22} strokeWidth={3} className="w-5 h-5 sm:w-4 sm:h-4 transition-transform group-hover:rotate-90 duration-300 shrink-0" />
+            <span className="hidden sm:inline tracking-wider">NUEVA RENDICIÓN</span>
+          </button>
+        )}
 
         {/* Botón de Actualizar Liquidaciones (Exclusivo para vista móvil) */}
         <button

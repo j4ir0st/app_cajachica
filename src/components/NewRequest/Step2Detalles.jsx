@@ -33,6 +33,7 @@ import Combobox from '../Combobox';
 import { formatearNombreEntidad, formatearSubtituloEntidad, esEntidadValidaEntrega } from '../../utils/entidades';
 import { filtrarSubgastosPorPerfil } from '../../utils/reglasAccesos';
 import { tieneRangoGerencial, esGerenteOperaciones, esSuperusuario, obtenerAreaLimpia } from '../../utils/permisos';
+import { obtenerProveedoresFrecuentesContextuales } from '../../utils/proveedoresFrecuentes';
 
 const API_URL = import.meta.env.DEV ? '' : (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
 
@@ -73,6 +74,7 @@ const obtenerDetalleVacio = () => ({
   tipogasto_url: null,
   subgasto_url: null,
   subgasto_obj: null,
+  incluir_comprobante: false,
   lima_provincia: 'L',
   provincia_url: null,
   empresa_id: null,
@@ -426,15 +428,49 @@ const Step2Detalles = ({ detalles = [], onChangeDetalles, onEliminarDetalle, mon
   };
 
   const opcionesEntidades = useMemo(() => {
-    return (entidades || [])
-      .filter(esEntidadValidaEntrega)
-      .map((e) => ({
-        value: e.url,
-        label: formatearNombreEntidad(e),
-        sublabel: formatearSubtituloEntidad(e),
-        busquedaExtra: `${e.ruc || ''} ${e.razon_social || ''} ${e.sede || ''} ${e.codigo_sede || ''}`,
-      }));
-  }, [entidades]);
+    if (!Array.isArray(entidades) || entidades.length === 0) return [];
+
+    // Detectar si el subgasto activo corresponde a ID 21 (TAXI DOMICILIO - FUERA DE HORARIO)
+    const idSubgastoActual = formulario.subgasto_obj?.id ?? extraerIdDeUrl(formulario.subgasto_url);
+    const esSubgastoTaxiDomicilio = idSubgastoActual === 21;
+
+    // Regla Institucional:
+    // La entidad DOMICILIO (ID: 9591) se restringe a cuando el subgasto es (ID: 21) TAXI DOMICILIO - FUERA DE HORARIO.
+    // Si es subgasto 21, debe aparecer al inicio entre las opciones; si no es, ni siquiera se puede elegir.
+    const entidadesFiltradas = entidades.filter((e) => {
+      if (!esEntidadValidaEntrega(e)) return false;
+      const idEntidad = e.id ?? extraerIdDeUrl(e.url);
+      const esDomicilio = idEntidad === 9591 || normalizarTexto(e.sede || e.nombre || '') === 'domicilio';
+      if (esDomicilio && !esSubgastoTaxiDomicilio) {
+        return false;
+      }
+      return true;
+    });
+
+    // Mapear opciones
+    const opcionesMapeadas = entidadesFiltradas.map((e) => ({
+      value: e.url,
+      label: formatearNombreEntidad(e),
+      sublabel: formatearSubtituloEntidad(e),
+      busquedaExtra: `${e.ruc || ''} ${e.razon_social || ''} ${e.sede || ''} ${e.codigo_sede || ''}`,
+      raw: e,
+    }));
+
+    // Si es subgasto 21, ordenar para que DOMICILIO (ID: 9591) aparezca al inicio
+    if (esSubgastoTaxiDomicilio) {
+      opcionesMapeadas.sort((a, b) => {
+        const idA = a.raw?.id ?? extraerIdDeUrl(a.raw?.url);
+        const idB = b.raw?.id ?? extraerIdDeUrl(b.raw?.url);
+        const esDomA = idA === 9591 || normalizarTexto(a.label) === 'domicilio';
+        const esDomB = idB === 9591 || normalizarTexto(b.label) === 'domicilio';
+        if (esDomA && !esDomB) return -1;
+        if (!esDomA && esDomB) return 1;
+        return 0;
+      });
+    }
+
+    return opcionesMapeadas;
+  }, [entidades, formulario.subgasto_obj, formulario.subgasto_url]);
 
   // Determinar si el usuario en sesión está registrado como chofer en rc_placas
   const placaDelUsuario = useMemo(() => {
@@ -484,9 +520,6 @@ const Step2Detalles = ({ detalles = [], onChangeDetalles, onEliminarDetalle, mon
     }));
   }, [placas, placaDelUsuario, formulario.placa_id]);
 
-  // Nombres comerciales de los 4 proveedores más comunes
-  const PROVEEDORES_COMUNES = ['OLTURSA', 'LIMA EXPRESA', 'CRUZ DEL SUR', 'INVERSIONES URBANISTICAS'];
-
   // Opciones para el Combobox de Proveedores
   const opcionesProveedores = useMemo(() => {
     if (!Array.isArray(proveedores) || proveedores.length === 0) return [];
@@ -511,22 +544,14 @@ const Step2Detalles = ({ detalles = [], onChangeDetalles, onEliminarDetalle, mon
     });
   }, [proveedores]);
 
-  // Proveedores comunes identificados en el catálogo
+  // Proveedores frecuentes contextuales calculados según el Tipo de Gasto y Subgasto activo
   const proveedoresComunesEncontrados = useMemo(() => {
-    if (!Array.isArray(proveedores) || proveedores.length === 0) return [];
-    return PROVEEDORES_COMUNES.map((nomComun) => {
-      const nomNorm = normalizarTexto(nomComun);
-      const encontrado = proveedores.find((p) => {
-        const nc = normalizarTexto(p.nombre_comercial || '');
-        const rz = normalizarTexto(p.razon_social || '');
-        return nc.includes(nomNorm) || rz.includes(nomNorm);
-      });
-      return {
-        nombre: nomComun,
-        proveedor: encontrado || null,
-      };
-    });
-  }, [proveedores]);
+    const tipoObj =
+      tiposGastoDisponibles.find((t) => coincidenUrlsOIds(t.url, formulario.tipogasto_url)) ||
+      subgastoActivo?.tipogasto_id;
+
+    return obtenerProveedoresFrecuentesContextuales(tipoObj, subgastoActivo, proveedores);
+  }, [tiposGastoDisponibles, formulario.tipogasto_url, subgastoActivo, proveedores]);
 
   // ============================================================================
   // MANEJADORES DE CAMBIO Y REGLAS REACTIVAS DEL FORMULARIO
@@ -585,7 +610,9 @@ const Step2Detalles = ({ detalles = [], onChangeDetalles, onEliminarDetalle, mon
 
   const seleccionarSubGasto = (subgastoUrl, tipoUrlOverride = null) => {
     setErrorLocal('');
-    const subEncontrado = subgastos.find((s) => s.url === subgastoUrl);
+    const subEncontrado = subgastos.find(
+      (s) => s.url === subgastoUrl || coincidenUrlsOIds(s.url || s.id, subgastoUrl)
+    );
     if (!subEncontrado) return;
 
     const tipoUrl = tipoUrlOverride || subEncontrado.tipogasto_id?.url || subEncontrado.tipogasto_id;
@@ -601,30 +628,37 @@ const Step2Detalles = ({ detalles = [], onChangeDetalles, onEliminarDetalle, mon
       zonaCalculada = 'L';
     }
 
-    setFormulario((prev) => ({
-      ...prev,
-      tipogasto_url: tipoUrl || prev.tipogasto_url,
-      subgasto_url: subgastoUrl,
-      subgasto_obj: subEncontrado,
-      lima_provincia: zonaCalculada,
-      provincia_url: zonaCalculada === 'L' ? null : prev.provincia_url,
-      origen_url: subEncontrado.requiere_origen_destino || subEncontrado.requiere_entidad ? prev.origen_url : null,
-      destino_url: subEncontrado.requiere_origen_destino ? prev.destino_url : null,
-      placa_id: subEncontrado.requiere_placa
-        ? (placaDelUsuario ? placaDelUsuario.id : prev.placa_id)
-        : null,
-      placa: subEncontrado.requiere_placa
-        ? (placaDelUsuario ? (placaDelUsuario.placa || '') : prev.placa)
-        : '',
-      placa_nombre: subEncontrado.requiere_placa
-        ? (placaDelUsuario
-          ? (placaDelUsuario.chofer ? `${placaDelUsuario.placa} - ${placaDelUsuario.chofer}` : placaDelUsuario.placa)
-          : prev.placa_nombre)
-        : '',
-      nro_ruc: subEncontrado.requiere_comprobante ? prev.nro_ruc : '',
-      nro_factura: subEncontrado.requiere_comprobante ? prev.nro_factura : '',
-      empresa_id: subEncontrado.requiere_comprobante ? prev.empresa_id : null,
-    }));
+    setFormulario((prev) => {
+      // Si el subgasto exige comprobante, incluir_comprobante es forzosamente true
+      // Si no exige comprobante, se mantiene la preferencia actual del usuario o false
+      const debeIncluirComprobante = subEncontrado.requiere_comprobante ? true : prev.incluir_comprobante;
+
+      return {
+        ...prev,
+        tipogasto_url: tipoUrl || prev.tipogasto_url,
+        subgasto_url: subEncontrado.url || subgastoUrl,
+        subgasto_obj: subEncontrado,
+        incluir_comprobante: debeIncluirComprobante,
+        lima_provincia: zonaCalculada,
+        provincia_url: zonaCalculada === 'L' ? null : prev.provincia_url,
+        origen_url: subEncontrado.requiere_origen_destino || subEncontrado.requiere_entidad ? prev.origen_url : null,
+        destino_url: subEncontrado.requiere_origen_destino ? prev.destino_url : null,
+        placa_id: subEncontrado.requiere_placa
+          ? (placaDelUsuario ? placaDelUsuario.id : prev.placa_id)
+          : null,
+        placa: subEncontrado.requiere_placa
+          ? (placaDelUsuario ? (placaDelUsuario.placa || '') : prev.placa)
+          : '',
+        placa_nombre: subEncontrado.requiere_placa
+          ? (placaDelUsuario
+            ? (placaDelUsuario.chofer ? `${placaDelUsuario.placa} - ${placaDelUsuario.chofer}` : placaDelUsuario.placa)
+            : prev.placa_nombre)
+          : '',
+        nro_ruc: debeIncluirComprobante ? prev.nro_ruc : '',
+        nro_factura: debeIncluirComprobante ? prev.nro_factura : '',
+        empresa_id: debeIncluirComprobante ? prev.empresa_id : null,
+      };
+    });
   };
 
   const manejarArchivo = (e) => {
@@ -911,7 +945,13 @@ const Step2Detalles = ({ detalles = [], onChangeDetalles, onEliminarDetalle, mon
     if (paso === 3) {
       if (!subgastoActivo) return true;
 
-      if (subgastoActivo.requiere_comprobante) {
+      // Validación de Comprobante Fiscal:
+      // - Si subgastoActivo.requiere_comprobante es true: es OBLIGATORIO siempre.
+      // - Si subgastoActivo.requiere_comprobante es false: es OPCIONAL. Solo si el usuario marcó
+      //   incluir_comprobante (o tiene datos de comprobante llenos), se vuelve obligatorio completar todos los campos fiscales.
+      const exigeComprobanteFiscal = subgastoActivo.requiere_comprobante || formulario.incluir_comprobante;
+
+      if (exigeComprobanteFiscal) {
         if (!extraerIdEmpresa(formulario.empresa_id)) {
           setErrorLocal('Debe seleccionar a nombre de qué empresa está facturando.');
           return false;
@@ -1094,8 +1134,17 @@ const Step2Detalles = ({ detalles = [], onChangeDetalles, onEliminarDetalle, mon
       if (matchProv) provId = matchProv.id;
     }
 
+    // Determinar si el registro tiene o incluye comprobante fiscal
+    const tieneDatosComprobante = Boolean(
+      item.nro_factura ||
+      item.nro_ruc ||
+      item.razon_social ||
+      extraerIdEmpresa(item.empresa_id !== undefined ? item.empresa_id : item.empresa)
+    );
+
     setFormulario({
       ...item,
+      incluir_comprobante: item.incluir_comprobante ?? (sub?.requiere_comprobante || tieneDatosComprobante),
       proveedor_id: provId,
       empresa_id: extraerIdEmpresa(item.empresa_id !== undefined ? item.empresa_id : item.empresa),
       razon_social: item.razon_social || '',
@@ -1162,17 +1211,29 @@ const Step2Detalles = ({ detalles = [], onChangeDetalles, onEliminarDetalle, mon
       }
     }
 
+    // Si el usuario no incluyó comprobante fiscal (o el subgasto no lo exige y no lo marcó),
+    // limpiar campos fiscales para que se guarde limpio como gasto sin factura (Tipo C)
+    const incluyeFiscal = subgastoActivo?.requiere_comprobante || formulario.incluir_comprobante;
+    const formularioLimpio = {
+      ...formulario,
+      empresa_id: incluyeFiscal ? formulario.empresa_id : null,
+      proveedor_id: incluyeFiscal ? formulario.proveedor_id : null,
+      nro_ruc: incluyeFiscal ? (formulario.nro_ruc || '').trim() : '',
+      razon_social: incluyeFiscal ? (formulario.razon_social || '').trim() : '',
+      nro_factura: incluyeFiscal ? (formulario.nro_factura || '').trim() : '',
+    };
+
     const nuevosDetalles = [...detalles];
     if (editandoIdx !== null) {
       const idExistente = detalles[editandoIdx]?.id || extraerIdDeUrl(detalles[editandoIdx]?.url);
       const urlExistente = detalles[editandoIdx]?.url;
       nuevosDetalles[editandoIdx] = {
-        ...formulario,
+        ...formularioLimpio,
         id: idExistente,
         url: urlExistente,
       };
     } else {
-      nuevosDetalles.push(formulario);
+      nuevosDetalles.push(formularioLimpio);
     }
 
     onChangeDetalles(nuevosDetalles);
@@ -1719,25 +1780,77 @@ const Step2Detalles = ({ detalles = [], onChangeDetalles, onEliminarDetalle, mon
               {pasoWizard === 3 && (
                 <div className="space-y-4 animate-fade-in">
                   {!subgastoActivo?.requiere_comprobante &&
+                    !formulario.incluir_comprobante &&
                     !subgastoActivo?.requiere_placa &&
                     !subgastoActivo?.requiere_origen_destino &&
                     !subgastoActivo?.requiere_entidad ? (
                     <div className="bg-brand-light/50 border border-brand-primary/20 rounded-2xl p-5 text-center space-y-2">
                       <CheckCircle2 size={30} className="text-brand-primary mx-auto" />
-                      <p className="text-sm font-black text-brand-dark">No requiere datos fiscales o vehiculares</p>
-                      <p className="text-xs text-gray-400">
-                        Este concepto no exige RUC, placa ni rutas. Puede continuar al paso de comprobante.
+                      <p className="text-sm font-black text-brand-dark">Gasto sin comprobante fiscal obligatorio</p>
+                      <p className="text-xs text-gray-500 max-w-sm mx-auto">
+                        Este concepto no exige factura de forma obligatoria y se registrará como gasto sin factura (Tipo C).
                       </p>
                     </div>
                   ) : null}
 
+                  {/* Interruptor Opcional de Factura cuando el subgasto NO lo exige por defecto */}
+                  {!subgastoActivo?.requiere_comprobante && (
+                    <div className="bg-gray-50/90 p-3.5 rounded-2xl border border-gray-200/80 flex items-center justify-between gap-3 transition-all">
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <div className={`p-2 rounded-xl transition-colors ${
+                          formulario.incluir_comprobante
+                            ? 'bg-brand-primary text-white'
+                            : 'bg-gray-200 text-gray-500'
+                        }`}>
+                          <Receipt size={16} />
+                        </div>
+                        <div className="min-w-0">
+                          <label
+                            htmlFor="check-incluir-factura"
+                            className="text-xs font-black text-brand-dark block cursor-pointer select-none"
+                          >
+                            ¿Desea ingresar factura o comprobante fiscal?
+                          </label>
+                          <span className="text-[10px] text-gray-500 block truncate">
+                            {formulario.incluir_comprobante
+                              ? 'Obligatorio indicar empresa facturada y proveedor'
+                              : 'Opcional. Si no marca, se registra sin factura (Tipo C)'}
+                          </span>
+                        </div>
+                      </div>
+
+                      <label className="relative inline-flex items-center cursor-pointer shrink-0">
+                        <input
+                          id="check-incluir-factura"
+                          type="checkbox"
+                          checked={Boolean(formulario.incluir_comprobante)}
+                          onChange={(e) => {
+                            const marcado = e.target.checked;
+                            setErrorLocal('');
+                            setFormulario((prev) => ({
+                              ...prev,
+                              incluir_comprobante: marcado,
+                              empresa_id: marcado ? prev.empresa_id : null,
+                              proveedor_id: marcado ? prev.proveedor_id : null,
+                              nro_ruc: marcado ? prev.nro_ruc : '',
+                              razon_social: marcado ? prev.razon_social : '',
+                              nro_factura: marcado ? prev.nro_factura : '',
+                            }));
+                          }}
+                          className="sr-only peer"
+                        />
+                        <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-brand-primary"></div>
+                      </label>
+                    </div>
+                  )}
+
                   {/* Comprobante Fiscal (Empresa Destino, RUC y Factura/Boleta) */}
-                  {subgastoActivo?.requiere_comprobante && (
+                  {(subgastoActivo?.requiere_comprobante || formulario.incluir_comprobante) && (
                     <div className="space-y-3 bg-gray-50/80 p-4 rounded-2xl border border-gray-100">
                       <div className="flex items-center justify-between">
                         <span className="text-[10px] font-black uppercase tracking-wider text-brand-dark flex items-center gap-1.5">
                           <Receipt size={14} className="text-brand-primary" />
-                          Comprobante Fiscal Electrónico
+                          Comprobante Fiscal Electrónico {subgastoActivo?.requiere_comprobante ? '(Obligatorio)' : '(Opcional Elegido)'}
                         </span>
                         {(() => {
                           if (!extraerIdEmpresa(formulario.empresa_id)) {
@@ -1818,29 +1931,30 @@ const Step2Detalles = ({ detalles = [], onChangeDetalles, onEliminarDetalle, mon
                           </button>
                         </div>
 
-                        {/* Botones directos con los 4 proveedores más comunes */}
-                        {!modoCrearProveedor && (
+                        {/* Botones directos contextuales con los proveedores frecuentes según el tipo/subgasto */}
+                        {!modoCrearProveedor && proveedoresComunesEncontrados.length > 0 && (
                           <div className="space-y-1">
                             <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider block">
                               Proveedores frecuentes:
                             </span>
-                            <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+                            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-1.5">
                               {proveedoresComunesEncontrados.map((item) => {
-                                const estaSeleccionado = item.proveedor && formulario.proveedor_id === item.proveedor.id;
+                                const estaSeleccionado = item.proveedor?.id && formulario.proveedor_id === item.proveedor.id;
                                 return (
                                   <button
-                                    key={item.nombre}
+                                    key={`${item.nombre}-${item.nro_ruc || ''}`}
                                     type="button"
                                     onClick={() => {
-                                      if (item.proveedor) {
+                                      if (item.proveedor && item.proveedor.id) {
                                         seleccionarProveedor(item.proveedor.id, { raw: item.proveedor });
                                       } else {
-                                        // Si aún no está en la BD con ese nombre, preparamos el formulario de nuevo proveedor
+                                        // Si aún no está registrado con ese ID en la BD local, abrir alta rápida con los datos listos
                                         setModoCrearProveedor(true);
-                                        setNuevoProveedor((prev) => ({
-                                          ...prev,
+                                        setNuevoProveedor({
+                                          nro_ruc: item.nro_ruc || '',
+                                          razon_social: item.razon_social || item.nombre,
                                           nombre_comercial: item.nombre,
-                                        }));
+                                        });
                                       }
                                     }}
                                     className={`px-2 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-tight transition-all border text-center truncate ${
@@ -1848,7 +1962,7 @@ const Step2Detalles = ({ detalles = [], onChangeDetalles, onEliminarDetalle, mon
                                         ? 'bg-brand-primary text-white border-brand-primary shadow-xs ring-2 ring-brand-primary/20'
                                         : 'bg-white text-gray-700 border-gray-200 hover:border-brand-primary hover:bg-brand-light/40'
                                     }`}
-                                    title={item.nombre}
+                                    title={`${item.nombre} ${item.nro_ruc ? `(${item.nro_ruc})` : ''}`}
                                   >
                                     {item.nombre}
                                   </button>
