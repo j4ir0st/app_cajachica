@@ -148,6 +148,16 @@ export default defineConfig(({ mode }) => {
           changeOrigin: true,
           secure: false,
         },
+        '/RC_AsignacionPresupuesto': {
+          target: target,
+          changeOrigin: true,
+          secure: false,
+        },
+        '/RC_GastosCombustibles': {
+          target: target,
+          changeOrigin: true,
+          secure: false,
+        },
         '/media': {
           target: target,
           changeOrigin: true,

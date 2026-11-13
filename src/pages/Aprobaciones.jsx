@@ -109,6 +109,47 @@ const formatearFechaAprobacion = (fecha) => {
 };
 
 /**
+ * Obtiene el nombre del revisor que revisó la rendición.
+ */
+const obtenerNombreRevisor = (req, usuarios = []) => {
+  if (!req) return 'Gerencia';
+  if (req.revisado_por_nombre) return req.revisado_por_nombre;
+  const rev = req.revisado_por;
+  if (!rev) return 'Gerencia';
+  if (typeof rev === 'object') {
+    return rev.full_name || `${rev.first_name || ''} ${rev.last_name || ''}`.trim() || rev.username || 'Gerencia';
+  }
+  if (Array.isArray(usuarios) && usuarios.length > 0) {
+    const idBuscado = typeof rev === 'number' ? rev : parseInt(String(rev).replace(/\D/g, ''), 10);
+    const encontrado = usuarios.find((u) => u.id === idBuscado);
+    if (encontrado) {
+      return (
+        encontrado.full_name ||
+        `${encontrado.first_name || ''} ${encontrado.last_name || ''}`.trim() ||
+        encontrado.username
+      );
+    }
+  }
+  return typeof rev === 'string' && !rev.startsWith('http') ? rev : 'Gerencia';
+};
+
+/**
+ * Genera el tooltip oficial de revisión gerencial:
+ * "Revisado por [nombre del revisor] - [fecha de revision]"
+ */
+const obtenerTooltipRevision = (req, usuarios = []) => {
+  const estaRevisado = Boolean(req?.revisado || req?.revision);
+  if (!estaRevisado) {
+    return 'Pendiente de revisión gerencial';
+  }
+  const nombreRev = obtenerNombreRevisor(req, usuarios);
+  const fechaStr = formatearFechaAprobacion(req.fecha_revision);
+  return fechaStr
+    ? `Revisado por ${nombreRev} - ${fechaStr}`
+    : `Revisado por ${nombreRev}`;
+};
+
+/**
  * Genera el tooltip oficial de aprobación:
  * "Aprobado por [nombre del jefe que aprobo] - [fecha de aprobacion]"
  */
@@ -219,6 +260,12 @@ const Aprobaciones = () => {
         top: '100',
       });
 
+      // Si el usuario es Jefe, Coordinador o Supervisor (y no es Gerente ni Superusuario),
+      // filtrar directamente en la consulta a la BD por revisado=false para no traer registros innecesarios y optimizar RAM.
+      if (!esGerente && !esSuper && esMando) {
+        parametros.append('revisado', 'false');
+      }
+
       const res = await fetchAuth(`${API_URL}/Requerimiento_CajaChica/?${parametros.toString()}`);
       if (!res.ok) {
         const errorDetallado = await extraerMensajeError(res);
@@ -284,21 +331,47 @@ const Aprobaciones = () => {
 
     const valorActual = Boolean(req.revisado || req.revision);
     const nuevoValor = !valorActual;
+    const ahoraIso = new Date().toISOString();
+    const nombreRevisor = user?.full_name || user?.nombre || user?.username || 'Gerencia';
     setConmutandoId(req.id);
 
-    // Actualización optimista inmediata en memoria
+    // Actualización optimista inmediata en memoria (incluyendo trazabilidad)
     setSolicitudes((prev) =>
-      prev.map((s) => (s.id === req.id ? { ...s, revisado: nuevoValor, revision: nuevoValor } : s))
+      prev.map((s) =>
+        s.id === req.id
+          ? {
+              ...s,
+              revisado: nuevoValor,
+              revision: nuevoValor,
+              revisado_por: nuevoValor ? user?.id : null,
+              revisado_por_nombre: nuevoValor ? nombreRevisor : null,
+              fecha_revision: nuevoValor ? ahoraIso : null,
+            }
+          : s
+      )
     );
     if (solicitudAuditoria && solicitudAuditoria.id === req.id) {
-      setSolicitudAuditoria((prev) => ({ ...prev, revisado: nuevoValor, revision: nuevoValor }));
+      setSolicitudAuditoria((prev) => ({
+        ...prev,
+        revisado: nuevoValor,
+        revision: nuevoValor,
+        revisado_por: nuevoValor ? user?.id : null,
+        revisado_por_nombre: nuevoValor ? nombreRevisor : null,
+        fecha_revision: nuevoValor ? ahoraIso : null,
+      }));
     }
 
     try {
+      const cuerpoRevision = {
+        revisado: nuevoValor,
+        revisado_por: nuevoValor ? user?.id : null,
+        fecha_revision: nuevoValor ? ahoraIso : null,
+      };
+
       const res = await fetchAuth(`${API_URL}/Requerimiento_CajaChica/${req.id}/revisar/?format=json`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ revisado: nuevoValor }),
+        body: JSON.stringify(cuerpoRevision),
       });
 
       if (!res.ok) {
@@ -438,18 +511,38 @@ const Aprobaciones = () => {
 
     const ids = requerimientosAfectados.map((r) => r.id);
     const idSet = new Set(ids);
+    const ahoraIso = new Date().toISOString();
+    const nombreRevisor = user?.full_name || user?.nombre || user?.username || 'Gerencia';
     setConmutandoMasivo(true);
 
     // Actualización optimista inmediata
     setSolicitudes((prev) =>
-      prev.map((s) => (idSet.has(s.id) ? { ...s, revisado: marcarComo, revision: marcarComo } : s))
+      prev.map((s) =>
+        idSet.has(s.id)
+          ? {
+              ...s,
+              revisado: marcarComo,
+              revision: marcarComo,
+              revisado_por: marcarComo ? user?.id : null,
+              revisado_por_nombre: marcarComo ? nombreRevisor : null,
+              fecha_revision: marcarComo ? ahoraIso : null,
+            }
+          : s
+      )
     );
 
     try {
+      const cuerpoMasivo = {
+        ids,
+        revisado: marcarComo,
+        revisado_por: marcarComo ? user?.id : null,
+        fecha_revision: marcarComo ? ahoraIso : null,
+      };
+
       const res = await fetchAuth(`${API_URL}/Requerimiento_CajaChica/revisar-masivo/?format=json`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ids, revisado: marcarComo }),
+        body: JSON.stringify(cuerpoMasivo),
       });
 
       if (!res.ok) {
@@ -486,15 +579,21 @@ const Aprobaciones = () => {
     let base = solicitudes;
 
     // 1. Filtrar por área si el usuario es Coordinador, Jefe o Supervisor (y no es Gerente ni Superusuario)
-    if (!esGerente && !esSuper && esMando && areaUsuarioLimpia) {
-      base = base.filter((req) => {
-        const areaReq = normalizarTexto(
-          typeof req.area_id === 'object'
-            ? (req.area_id?.nombre || req.area_id?.area_nombre || '')
-            : String(req.area_id || req.area || '')
-        );
-        return areaReq.includes(areaUsuarioLimpia) || areaUsuarioLimpia.includes(areaReq);
-      });
+    if (!esGerente && !esSuper && esMando) {
+      if (areaUsuarioLimpia) {
+        base = base.filter((req) => {
+          const areaReq = normalizarTexto(
+            typeof req.area_id === 'object'
+              ? (req.area_id?.nombre || req.area_id?.area_nombre || '')
+              : String(req.area_id || req.area || '')
+          );
+          return areaReq.includes(areaUsuarioLimpia) || areaUsuarioLimpia.includes(areaReq);
+        });
+      }
+
+      // Regla: Coordinadores o Jefes solo ven rendiciones pendientes de revisión gerencial (revisado === false).
+      // Lo que el gerente ya revisó no debe mostrarse a los mandos.
+      base = base.filter((r) => !Boolean(r.revisado || r.revision));
     }
 
     // 2. Búsqueda por texto o ID
@@ -581,6 +680,9 @@ const Aprobaciones = () => {
       } else {
         base = base.filter((r) => !Boolean(r.revisado || r.revision));
       }
+    } else if (!esSuper && esMando) {
+      // Para jefes o coordinadores, solo contabilizar lo pendiente de revisión
+      base = base.filter((r) => !Boolean(r.revisado || r.revision));
     }
 
     const c = {
@@ -645,6 +747,9 @@ const Aprobaciones = () => {
             search: termino,
             top: '100',
           });
+          if (!esGerente && !esSuper && esMando) {
+            params.append('revisado', 'false');
+          }
           const res = await fetchAuth(`${API_URL}/Requerimiento_CajaChica/?${params.toString()}`);
           if (res.ok) {
             const data = await res.json();
@@ -1548,7 +1653,7 @@ const Aprobaciones = () => {
                           }`}
                           title={
                             estaRevisado
-                              ? 'Revisado por Gerencia. Clic para desmarcar'
+                              ? `${obtenerTooltipRevision(req, usuarios)}. Clic para desmarcar`
                               : 'Pendiente de revisión. Clic para marcar como revisado'
                           }
                         >
@@ -1632,6 +1737,14 @@ const Aprobaciones = () => {
                           {req.obs && (
                             <span className="italic truncate max-w-xs lg:max-w-md text-gray-500">
                               "{req.obs}"
+                            </span>
+                          )}
+                          {estaRevisado && (
+                            <span
+                              className="text-emerald-700 font-bold bg-emerald-50 px-1.5 py-0.5 rounded cursor-help shrink-0"
+                              title={obtenerTooltipRevision(req, usuarios)}
+                            >
+                              ✓ {obtenerTooltipRevision(req, usuarios)}
                             </span>
                           )}
                         </div>
@@ -1774,6 +1887,11 @@ const Aprobaciones = () => {
                             type="button"
                             onClick={(e) => handleToggleRevision(req, e)}
                             disabled={conmutandoId === req.id || conmutandoMasivo}
+                            title={
+                              estaRevisado
+                                ? `${obtenerTooltipRevision(req, usuarios)}. Clic para desmarcar`
+                                : 'Pendiente de revisión. Clic para marcar como revisado'
+                            }
                             className={`flex items-center gap-1 px-2 py-0.5 rounded-lg border font-black text-[9px] transition-all shadow-xs ${
                               estaRevisado
                                 ? 'bg-emerald-500 text-white border-emerald-600'
@@ -1822,6 +1940,17 @@ const Aprobaciones = () => {
                           <p className="text-[11px] text-gray-600 font-medium mt-0.5 line-clamp-1 italic">
                             "{req.obs}"
                           </p>
+                        )}
+                        {estaRevisado && (
+                          <div className="mt-1">
+                            <span
+                              className="text-[10px] text-emerald-700 font-bold bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded-md inline-flex items-center gap-1 cursor-help"
+                              title={obtenerTooltipRevision(req, usuarios)}
+                            >
+                              <CheckCircle2 size={11} className="text-emerald-600 shrink-0" />
+                              <span>{obtenerTooltipRevision(req, usuarios)}</span>
+                            </span>
+                          </div>
                         )}
 
                         {/* Subgasto preliminar en móvil */}
@@ -2046,13 +2175,25 @@ const Aprobaciones = () => {
                 </div>
                 {Boolean(solicitudAuditoria.aprobado) && (
                   <div className="col-span-2 sm:col-span-3 pt-1 border-t border-brand-primary/10 flex items-center justify-between text-[11px]">
-                    <span className="font-bold text-gray-500">Estado de Aprobación:</span>
+                    <span className="font-bold text-gray-500">Aprobación de Jefatura:</span>
                     <span
                       className="font-black text-emerald-700 flex items-center gap-1 cursor-help"
                       title={obtenerTooltipAprobacion(solicitudAuditoria, usuarios)}
                     >
                       <ShieldCheck size={12} className="text-emerald-600 shrink-0" />
                       <span>{obtenerTooltipAprobacion(solicitudAuditoria, usuarios)}</span>
+                    </span>
+                  </div>
+                )}
+                {Boolean(solicitudAuditoria.revisado || solicitudAuditoria.revision) && (
+                  <div className="col-span-2 sm:col-span-3 pt-1 border-t border-brand-primary/10 flex items-center justify-between text-[11px]">
+                    <span className="font-bold text-gray-500">Revisión Gerencial:</span>
+                    <span
+                      className="font-black text-emerald-700 flex items-center gap-1 cursor-help"
+                      title={obtenerTooltipRevision(solicitudAuditoria, usuarios)}
+                    >
+                      <CheckCircle2 size={12} className="text-emerald-600 shrink-0" />
+                      <span>{obtenerTooltipRevision(solicitudAuditoria, usuarios)}</span>
                     </span>
                   </div>
                 )}

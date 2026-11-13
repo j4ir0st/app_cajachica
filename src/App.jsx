@@ -9,12 +9,16 @@ import CierreCaja from './pages/CierreCaja';
 import Aprobaciones from './pages/Aprobaciones';
 import BalanceSemanal from './pages/BalanceSemanal';
 import RegistroFacturasMayores from './pages/RegistroFacturasMayores';
+import RegistroCombustibles from './pages/RegistroCombustibles';
+import AsignacionPresupuesto from './pages/AsignacionPresupuesto';
 import { useUserStore } from './store/userStore';
 import {
   puedeAccederAprobaciones,
   puedeAccederCierreCaja,
   puedeAccederBalanceSemanal,
-  puedeAccederRegistroFacturasMayor
+  puedeAccederRegistroFacturasMayor,
+  puedeAccederRegistroCombustibles,
+  puedeAccederAsignacionPresupuesto
 } from './utils/permisos';
 
 /**
@@ -85,6 +89,22 @@ function App() {
             element={
               <ProtectedRoute permiso={puedeAccederRegistroFacturasMayor}>
                 <RegistroFacturasMayores />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="combustibles"
+            element={
+              <ProtectedRoute permiso={puedeAccederRegistroCombustibles}>
+                <RegistroCombustibles />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="asignacion-presupuesto"
+            element={
+              <ProtectedRoute permiso={puedeAccederAsignacionPresupuesto}>
+                <AsignacionPresupuesto />
               </ProtectedRoute>
             }
           />

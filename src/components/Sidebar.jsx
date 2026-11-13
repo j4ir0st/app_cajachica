@@ -12,7 +12,9 @@ import {
   Menu,
   X,
   CreditCard,
-  Receipt
+  Receipt,
+  Fuel,
+  Wallet
 } from 'lucide-react';
 import { useUserStore } from '../store/userStore';
 import { puedeAccederRuta } from '../utils/permisos';
@@ -64,6 +66,16 @@ const Sidebar = () => {
       title: 'Registro de Facturas S/. +',
       icon: Receipt,
       path: '/facturas-mayores',
+    },
+    {
+      title: 'Gastos Combustible',
+      icon: Fuel,
+      path: '/combustibles',
+    },
+    {
+      title: 'Asignar Presupuesto',
+      icon: Wallet,
+      path: '/asignacion-presupuesto',
     },
   ];
 
@@ -139,7 +151,7 @@ const Sidebar = () => {
       {/* Info Badge (Desktop colapsado) */}
       {!collapsed && (
         <div className="p-6 m-4 rounded-3xl bg-brand-primary/10 border border-white/5 animate-fade-in">
-          <p className="text-[10px] font-black text-brand-accent uppercase tracking-[0.2em] mb-1">Sistema v2.1</p>
+          <p className="text-[10px] font-black text-brand-accent uppercase tracking-[0.2em] mb-1">Sistema v2.2</p>
           <p className="text-xs text-white/50 font-medium">Control de Caja Chica</p>
         </div>
       )}

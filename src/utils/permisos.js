@@ -292,6 +292,51 @@ export const puedeAccederRegistroFacturasMayor = (user) => {
 };
 
 /**
+ * Valida el acceso a Gastos de Combustibles (`/combustibles`).
+ * Regla:
+ * 1. Superusuario y Gerente de Operaciones tienen acceso total.
+ * 2. Mandos de área: Jefes, Coordinadores y Supervisores.
+ * 3. Usuarios de Distribución cuyo puesto sea Chofer (area_id o area = 'distribucion' y puesto_id o puesto = 'chofer').
+ */
+export const puedeAccederRegistroCombustibles = (user) => {
+  if (!user) return false;
+  if (esSuperusuario(user)) return true;
+  if (esGerenteOperaciones(user)) return true;
+  if (esMandoArea(user) || esRolAprobador(user)) return true;
+
+  const area = obtenerAreaLimpia(user);
+  const puesto = obtenerPuestoLimpio(user);
+
+  const esDistribucion = area.includes('distribucion') || area.includes('distribución');
+  const esChofer = puesto.includes('chofer') || puesto.includes('conductor');
+
+  return esDistribucion && esChofer;
+};
+
+/**
+ * Determina si el usuario tiene privilegios para cambiar el responsable en el registro de combustible.
+ * Permitido solo para Jefes, Coordinadores, Supervisores, Gerente de Operaciones y Superusuarios.
+ * Para Choferes el responsable está bloqueado a su propio usuario logueado.
+ */
+export const puedeCambiarResponsableCombustible = (user) => {
+  if (!user) return false;
+  if (esSuperusuario(user)) return true;
+  if (esGerenteOperaciones(user)) return true;
+  if (esMandoArea(user) || esRolAprobador(user)) return true;
+  return false;
+};
+
+/**
+ * Valida el acceso exclusivo para Asignación de Presupuesto a Mandos (`/asignacion-presupuesto`).
+ * Exclusivo para: Gerente de Operaciones y Superusuario.
+ */
+export const puedeAccederAsignacionPresupuesto = (user) => {
+  if (!user) return false;
+  if (esSuperusuario(user)) return true;
+  return esGerenteOperaciones(user);
+};
+
+/**
  * Valida el acceso a Cierre de Caja (`/cierre-caja`).
  * Solo permitido para Gerente de Operaciones y Superusuario.
  * Los administradores (`is_staff`) NO tienen acceso.
@@ -336,6 +381,14 @@ export const puedeAccederRuta = (ruta, user) => {
   const rutaLimpia = ruta.replace(/^\//, '').toLowerCase();
 
   switch (rutaLimpia) {
+    case 'asignacion-presupuesto':
+    case 'asignaciones':
+      return puedeAccederAsignacionPresupuesto(user);
+
+    case 'combustibles':
+    case 'gastos-combustibles':
+      return puedeAccederRegistroCombustibles(user);
+
     case 'facturas-mayores':
     case 'registro-facturas':
       return puedeAccederRegistroFacturasMayor(user);

@@ -20,8 +20,9 @@ const Header = () => {
   const navigate = useNavigate();
   const location = useLocation();
 
-  // Verifica si el usuario está en la vista de Registro de Facturas S/. +
+  // Verifica si el usuario está en vistas con botones contextuales
   const esVistaFacturasMayores = location.pathname === '/facturas-mayores';
+  const esVistaCombustibles = location.pathname === '/combustibles';
 
   // Cerrar el menú desplegable al hacer clic fuera
   useEffect(() => {
@@ -135,7 +136,7 @@ const Header = () => {
 
       {/* Acciones e Info de Usuario */}
       <div className="flex items-center gap-3 sm:gap-6">
-        {/* Botón Principal de Acción (Nueva Rendición o Nueva Factura según la vista actual) */}
+        {/* Botón Principal de Acción (Nueva Rendición, Nueva Factura o Nuevo Combustible) */}
         {esVistaFacturasMayores ? (
           <button
             onClick={() => window.dispatchEvent(new CustomEvent('abrir-modal-nueva-factura'))}
@@ -144,6 +145,15 @@ const Header = () => {
           >
             <Plus size={22} strokeWidth={3} className="w-5 h-5 sm:w-4 sm:h-4 transition-transform group-hover:rotate-90 duration-300 shrink-0" />
             <span className="hidden sm:inline tracking-wider">NUEVA FACTURA</span>
+          </button>
+        ) : esVistaCombustibles ? (
+          <button
+            onClick={() => window.dispatchEvent(new CustomEvent('abrir-modal-nuevo-combustible'))}
+            title="Registrar Gasto de Combustible"
+            className="flex items-center justify-center gap-1.5 sm:gap-2 bg-gradient-to-r from-amber-600 to-orange-700 text-white font-black text-xs px-2.5 py-2 sm:px-4 sm:py-2.5 rounded-xl sm:rounded-2xl shadow-md shadow-amber-600/25 hover:shadow-lg hover:shadow-amber-600/35 hover:scale-105 active:scale-95 transition-all group shrink-0"
+          >
+            <Plus size={22} strokeWidth={3} className="w-5 h-5 sm:w-4 sm:h-4 transition-transform group-hover:rotate-90 duration-300 shrink-0" />
+            <span className="hidden sm:inline tracking-wider">NUEVO COMBUSTIBLE</span>
           </button>
         ) : (
           <button
